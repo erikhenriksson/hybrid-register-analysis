@@ -260,4 +260,4 @@ if __name__ == "__main__":
             print(f"Text (truncated): {row['text'][:100]}...")
             print(f"True classes: {[analyzer.id2label[c] for c in true_classes]}")
             print(f"True positives: {[analyzer.id2label[c] for c in true_positives]}")
-            print(f"Discreteness score: {score:.3f}")
+            print(f"Discreteness scores: {score}")
