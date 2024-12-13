@@ -401,156 +401,166 @@ class RegisterHybridityAnalyzer:
 
         return scores, attributions, tokens, true_positives
 
-
-def analyze_hybridity_mi(
-    self, text: str, true_classes: List[int], window_size=5, n_bins=10, pooling="mean"
-) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
-    """
-    Analyze hybridity using mutual information between class attributions.
-    Uses word-level analysis and sliding windows.
-
-    Args:
-        text: Input text
-        true_classes: List of true class indices
-        window_size: Size of sliding window (in words)
-        n_bins: Number of bins for MI calculation
-        pooling: 'mean' or 'max' for subword pooling
-    """
-    result = self.compute_token_attributions(text, true_classes)
-    if result is None:
-        return None
-
-    attributions, tokens, true_positives = result
-    scores = {}
-
-    def normalize_attributions(attrs):
-        """Normalize attribution values."""
-        attrs = attrs - attrs.mean()
-        std = attrs.std()
-        if std > 0:
-            attrs = attrs / std
-        return attrs
-
-    def combine_subwords(tokens, attrs1, attrs2):
+    def analyze_hybridity_mi(
+        self,
+        text: str,
+        true_classes: List[int],
+        window_size=5,
+        n_bins=10,
+        pooling="mean",
+    ) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
         """
-        Combine subword tokens into words for both attribution arrays.
-        Returns word-level attributions and reconstructed words.
-        """
-        word_attrs1 = []
-        word_attrs2 = []
-        words = []
-        current_word_attr1 = []
-        current_word_attr2 = []
-        current_word = []
+        Analyze hybridity using mutual information between class attributions.
+        Uses word-level analysis and sliding windows.
 
-        for i, token in enumerate(tokens):
-            # XLM-RoBERTa uses '▁' at the start of new words
-            if token.startswith("▁") and current_word_attr1:
+        Args:
+            text: Input text
+            true_classes: List of true class indices
+            window_size: Size of sliding window (in words)
+            n_bins: Number of bins for MI calculation
+            pooling: 'mean' or 'max' for subword pooling
+        """
+        result = self.compute_token_attributions(text, true_classes)
+        if result is None:
+            return None
+
+        attributions, tokens, true_positives = result
+        scores = {}
+
+        def normalize_attributions(attrs):
+            """Normalize attribution values."""
+            attrs = attrs - attrs.mean()
+            std = attrs.std()
+            if std > 0:
+                attrs = attrs / std
+            return attrs
+
+        def combine_subwords(tokens, attrs1, attrs2):
+            """
+            Combine subword tokens into words for both attribution arrays.
+            Returns word-level attributions and reconstructed words.
+            """
+            word_attrs1 = []
+            word_attrs2 = []
+            words = []
+            current_word_attr1 = []
+            current_word_attr2 = []
+            current_word = []
+
+            for i, token in enumerate(tokens):
+                # XLM-RoBERTa uses '▁' at the start of new words
+                if token.startswith("▁") and current_word_attr1:
+                    if pooling == "mean":
+                        word_attrs1.append(np.mean(current_word_attr1))
+                        word_attrs2.append(np.mean(current_word_attr2))
+                    else:  # max pooling
+                        word_attrs1.append(np.max(current_word_attr1))
+                        word_attrs2.append(np.max(current_word_attr2))
+                    words.append("".join(current_word))
+                    current_word_attr1 = []
+                    current_word_attr2 = []
+                    current_word = []
+
+                # Remove '▁' and add to current word if not special token
+                clean_token = token.lstrip("▁")
+                if not clean_token.startswith("<") and not clean_token.endswith(">"):
+                    current_word_attr1.append(attrs1[i])
+                    current_word_attr2.append(attrs2[i])
+                    current_word.append(clean_token)
+
+            # Handle last word
+            if current_word_attr1:
                 if pooling == "mean":
                     word_attrs1.append(np.mean(current_word_attr1))
                     word_attrs2.append(np.mean(current_word_attr2))
-                else:  # max pooling
+                else:
                     word_attrs1.append(np.max(current_word_attr1))
                     word_attrs2.append(np.max(current_word_attr2))
                 words.append("".join(current_word))
-                current_word_attr1 = []
-                current_word_attr2 = []
-                current_word = []
 
-            # Remove '▁' and add to current word if not special token
-            clean_token = token.lstrip("▁")
-            if not clean_token.startswith("<") and not clean_token.endswith(">"):
-                current_word_attr1.append(attrs1[i])
-                current_word_attr2.append(attrs2[i])
-                current_word.append(clean_token)
+            return np.array(word_attrs1), np.array(word_attrs2), words
 
-        # Handle last word
-        if current_word_attr1:
-            if pooling == "mean":
-                word_attrs1.append(np.mean(current_word_attr1))
-                word_attrs2.append(np.mean(current_word_attr2))
-            else:
-                word_attrs1.append(np.max(current_word_attr1))
-                word_attrs2.append(np.max(current_word_attr2))
-            words.append("".join(current_word))
+        def compute_local_mi(attrs1, attrs2, window_size, n_bins):
+            """
+            Compute MI in sliding windows across the text.
+            Returns array of local MI values.
+            """
+            local_mis = []
+            for i in range(len(attrs1) - window_size + 1):
+                window1 = attrs1[i : i + window_size]
+                window2 = attrs2[i : i + window_size]
 
-        return np.array(word_attrs1), np.array(word_attrs2), words
+                # Compute 2D histogram in this window
+                hist_2d, _, _ = np.histogram2d(
+                    window1, window2, bins=n_bins, density=True
+                )
 
-    def compute_local_mi(attrs1, attrs2, window_size, n_bins):
-        """
-        Compute MI in sliding windows across the text.
-        Returns array of local MI values.
-        """
-        local_mis = []
-        for i in range(len(attrs1) - window_size + 1):
-            window1 = attrs1[i : i + window_size]
-            window2 = attrs2[i : i + window_size]
+                # Calculate marginal distributions
+                px = np.sum(hist_2d, axis=1)
+                py = np.sum(hist_2d, axis=0)
 
-            # Compute 2D histogram in this window
-            hist_2d, _, _ = np.histogram2d(window1, window2, bins=n_bins, density=True)
+                # Calculate MI for this window
+                mi = 0
+                for x in range(n_bins):
+                    for y in range(n_bins):
+                        if hist_2d[x, y] > 0:
+                            mi += hist_2d[x, y] * np.log2(
+                                hist_2d[x, y] / (px[x] * py[y] + 1e-10)
+                            )
+                local_mis.append(mi)
 
-            # Calculate marginal distributions
-            px = np.sum(hist_2d, axis=1)
-            py = np.sum(hist_2d, axis=0)
+            return np.array(local_mis)
 
-            # Calculate MI for this window
-            mi = 0
-            for x in range(n_bins):
-                for y in range(n_bins):
-                    if hist_2d[x, y] > 0:
-                        mi += hist_2d[x, y] * np.log2(
-                            hist_2d[x, y] / (px[x] * py[y] + 1e-10)
-                        )
-            local_mis.append(mi)
+        # Process each pair of classes
+        attr_arrays = {
+            class_idx: attrs.numpy() for class_idx, attrs in attributions.items()
+        }
+        class_pairs = list(itertools.combinations(attr_arrays.keys(), 2))
 
-        return np.array(local_mis)
+        mi_scores = []
+        mi_variations = []
+        local_mis_all = []
 
-    # Process each pair of classes
-    attr_arrays = {
-        class_idx: attrs.numpy() for class_idx, attrs in attributions.items()
-    }
-    class_pairs = list(itertools.combinations(attr_arrays.keys(), 2))
+        for class1, class2 in class_pairs:
+            # Normalize attributions
+            norm_attrs1 = normalize_attributions(torch.tensor(attr_arrays[class1]))
+            norm_attrs2 = normalize_attributions(torch.tensor(attr_arrays[class2]))
 
-    mi_scores = []
-    mi_variations = []
-    local_mis_all = []
+            # Convert to absolute values
+            abs_attrs1 = np.abs(norm_attrs1.numpy())
+            abs_attrs2 = np.abs(norm_attrs2.numpy())
 
-    for class1, class2 in class_pairs:
-        # Normalize attributions
-        norm_attrs1 = normalize_attributions(torch.tensor(attr_arrays[class1]))
-        norm_attrs2 = normalize_attributions(torch.tensor(attr_arrays[class2]))
+            # Combine subwords into words
+            word_attrs1, word_attrs2, words = combine_subwords(
+                tokens, abs_attrs1, abs_attrs2
+            )
 
-        # Convert to absolute values
-        abs_attrs1 = np.abs(norm_attrs1.numpy())
-        abs_attrs2 = np.abs(norm_attrs2.numpy())
+            # Compute local MI values
+            local_mis = compute_local_mi(word_attrs1, word_attrs2, window_size, n_bins)
+            local_mis_all.append(local_mis)
 
-        # Combine subwords into words
-        word_attrs1, word_attrs2, words = combine_subwords(
-            tokens, abs_attrs1, abs_attrs2
-        )
+            # Store overall MI and its variation
+            mi_scores.append(np.mean(local_mis))
+            mi_variations.append(np.std(local_mis))
 
-        # Compute local MI values
-        local_mis = compute_local_mi(word_attrs1, word_attrs2, window_size, n_bins)
-        local_mis_all.append(local_mis)
+        # Store scores
+        scores["mutual_information"] = np.mean(
+            mi_scores
+        )  # Average MI across class pairs
+        scores["mi_variation"] = np.mean(
+            mi_variations
+        )  # How much MI varies across the text
+        scores["mi_max"] = np.max(
+            [np.max(mis) for mis in local_mis_all]
+        )  # Highest local MI
+        scores["mi_min"] = np.min(
+            [np.min(mis) for mis in local_mis_all]
+        )  # Lowest local MI
 
-        # Store overall MI and its variation
-        mi_scores.append(np.mean(local_mis))
-        mi_variations.append(np.std(local_mis))
+        # Store local MI patterns for visualization
+        scores["local_mis"] = local_mis_all
 
-    # Store scores
-    scores["mutual_information"] = np.mean(mi_scores)  # Average MI across class pairs
-    scores["mi_variation"] = np.mean(
-        mi_variations
-    )  # How much MI varies across the text
-    scores["mi_max"] = np.max(
-        [np.max(mis) for mis in local_mis_all]
-    )  # Highest local MI
-    scores["mi_min"] = np.min([np.min(mis) for mis in local_mis_all])  # Lowest local MI
-
-    # Store local MI patterns for visualization
-    scores["local_mis"] = local_mis_all
-
-    return scores, attributions, tokens, true_positives
+        return scores, attributions, tokens, true_positives
 
 
 # Example usage
