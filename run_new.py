@@ -5,6 +5,7 @@ from captum.attr import LayerIntegratedGradients
 import numpy as np
 from typing import List, Tuple, Dict
 from tqdm import tqdm
+import itertools
 
 
 class RegisterHybridityAnalyzer:
