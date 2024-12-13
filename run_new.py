@@ -89,7 +89,7 @@ class RegisterHybridityAnalyzer:
 
         # Calculate attributions for each true positive class
         for class_idx in tqdm(true_positives, desc="Computing attributions"):
-            attributions, delta = lig.attribute(
+            attributions = lig.attribute(
                 inputs=input_ids,
                 baselines=baseline,
                 target=int(class_idx),
