@@ -558,7 +558,7 @@ class RegisterHybridityAnalyzer:
         )  # Lowest local MI
 
         # Store local MI patterns for visualization
-        scores["local_mis"] = local_mis_all
+        # scores["local_mis"] = local_mis_all
 
         return scores, attributions, tokens, true_positives
 
