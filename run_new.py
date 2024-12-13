@@ -328,12 +328,6 @@ class RegisterHybridityAnalyzer:
         ):
             """
             Calculate blockiness by first combining subtokens into words.
-
-            Args:
-                attrs_class1, attrs_class2: Attribution arrays for two classes
-                tokens: List of tokens from XLM-RoBERTa tokenizer
-                threshold: Threshold for considering changes significant
-                pooling: 'mean' or 'max' for how to combine subword attributions
             """
             # Normalize attributions
             norm_attrs1 = normalize_attributions(torch.tensor(attrs_class1))
@@ -394,7 +388,11 @@ class RegisterHybridityAnalyzer:
 
         for class1, class2 in class_pairs:
             blockiness = get_overall_blockiness(
-                attr_arrays[class1], attr_arrays[class2]
+                attr_arrays[class1],
+                attr_arrays[class2],
+                tokens,  # Pass the tokens here
+                threshold=0.1,
+                pooling="mean",  # or 'max'
             )
             blockiness_scores.append(blockiness)
 
