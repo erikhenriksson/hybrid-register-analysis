@@ -581,8 +581,8 @@ if __name__ == "__main__":
     # Analyze texts
     print(f"Analyzing {len(df)} texts...")
     results = []
-
-    for idx, row in tqdm(df.iloc[:10000].iterrows(), desc="Processing texts"):
+    all_scores = []
+    for idx, row in tqdm(df.iloc[:100].iterrows(), desc="Processing texts"):
         true_classes = analyzer.get_true_classes(row["register"])
 
         # Skip if not multiple true classes in main classes
@@ -591,9 +591,45 @@ if __name__ == "__main__":
 
         analysis = analyzer.analyze_hybridity_mi(row["text"], true_classes)
         if analysis is not None:
-            score, attributions, tokens, true_positives = analysis
+            scores, attributions, tokens, true_positives = analysis
             print(f"\nText {idx}:")
             print(f"Text (truncated): {row['text'][:100]}...")
             print(f"True classes: {[analyzer.id2label[c] for c in true_classes]}")
             print(f"True positives: {[analyzer.id2label[c] for c in true_positives]}")
-            print(f"Discreteness scores: {score}")
+            print(f"Discreteness scores: {scores}")
+            all_scores.append(
+                {
+                    "idx": idx,
+                    "text_snippet": row["text"][:200] + "...",  # First 200 chars
+                    "true_classes": [analyzer.id2label[c] for c in true_classes],
+                    "mi": scores["mutual_information"],
+                    "variation": scores["mi_variation"],
+                }
+            )
+
+    # Convert to DataFrame for easy analysis
+    scores_df = pd.DataFrame(all_scores)
+
+    # Get basic statistics
+    print("\nMutual Information statistics:")
+    print(scores_df["mi"].describe())
+    print("\nVariation statistics:")
+    print(scores_df["variation"].describe())
+
+    # Get texts at different extremes
+    print("\nMost blended texts (high MI, low variation):")
+    print(
+        scores_df.nsmallest(5, "variation").nlargest(3, "mi")[
+            ["idx", "text_snippet", "true_classes", "mi", "variation"]
+        ]
+    )
+
+    print("\nMost discrete texts (low MI, high variation):")
+    print(
+        scores_df.nlargest(5, "variation").nsmallest(3, "mi")[
+            ["idx", "text_snippet", "true_classes", "mi", "variation"]
+        ]
+    )
+
+    # Save full results to CSV for later analysis
+    scores_df.to_csv("hybrid_scores.csv", index=False)
