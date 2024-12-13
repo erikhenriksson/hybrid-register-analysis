@@ -95,7 +95,8 @@ class RegisterHybridityAnalyzer:
                 target=int(class_idx),
                 additional_forward_args=(attention_mask,),
                 n_steps=50,
-                return_convergence_delta=True,
+                internal_batch_size=10,
+                # return_convergence_delta=True,
             )
 
             # Store attribution scores (summed across embedding dimension)
