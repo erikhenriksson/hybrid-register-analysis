@@ -323,26 +323,64 @@ class RegisterHybridityAnalyzer:
                 attrs = attrs / std
             return attrs
 
-        def get_overall_blockiness(attrs_class1, attrs_class2, threshold=0.1):
+        def get_overall_blockiness(
+            attrs_class1, attrs_class2, tokens, threshold=0.1, pooling="mean"
+        ):
             """
-            Calculate overall blockiness by comparing attribution patterns between classes.
-            Returns a score between 0 (very blended) and 1 (very blocky).
+            Calculate blockiness by first combining subtokens into words.
+
+            Args:
+                attrs_class1, attrs_class2: Attribution arrays for two classes
+                tokens: List of tokens from XLM-RoBERTa tokenizer
+                threshold: Threshold for considering changes significant
+                pooling: 'mean' or 'max' for how to combine subword attributions
             """
-            # Normalize both attribution patterns
+            # Normalize attributions
             norm_attrs1 = normalize_attributions(torch.tensor(attrs_class1))
             norm_attrs2 = normalize_attributions(torch.tensor(attrs_class2))
 
-            # Get only positive attributions
-            pos_attrs1 = np.maximum(norm_attrs1.numpy(), 0)
-            pos_attrs2 = np.maximum(norm_attrs2.numpy(), 0)
+            abs_attrs1 = np.abs(norm_attrs1.numpy())
+            abs_attrs2 = np.abs(norm_attrs2.numpy())
 
-            # Calculate the difference between attribution patterns
-            differences = np.abs(pos_attrs1 - pos_attrs2)
+            # Combine subtokens into words
+            word_attrs1 = []
+            word_attrs2 = []
+            current_word_attr1 = []
+            current_word_attr2 = []
 
-            # Calculate how often the dominant class switches
+            for i, token in enumerate(tokens):
+                # XLM-RoBERTa uses '▁' at the start of new words
+                if token.startswith("▁") and current_word_attr1:  # End of previous word
+                    if pooling == "mean":
+                        word_attrs1.append(np.mean(current_word_attr1))
+                        word_attrs2.append(np.mean(current_word_attr2))
+                    else:  # max pooling
+                        word_attrs1.append(np.max(current_word_attr1))
+                        word_attrs2.append(np.max(current_word_attr2))
+                    current_word_attr1 = []
+                    current_word_attr2 = []
+
+                # Remove '▁' before checking if it's a special token
+                clean_token = token.lstrip("▁")
+                if not clean_token.startswith("<") and not clean_token.endswith(
+                    ">"
+                ):  # Skip special tokens
+                    current_word_attr1.append(abs_attrs1[i])
+                    current_word_attr2.append(abs_attrs2[i])
+
+            # Handle last word if needed
+            if current_word_attr1:
+                if pooling == "mean":
+                    word_attrs1.append(np.mean(current_word_attr1))
+                    word_attrs2.append(np.mean(current_word_attr2))
+                else:  # max pooling
+                    word_attrs1.append(np.max(current_word_attr1))
+                    word_attrs2.append(np.max(current_word_attr2))
+
+            # Calculate differences at word level
+            differences = np.abs(np.array(word_attrs1) - np.array(word_attrs2))
             changes = np.abs(np.diff(differences)) > threshold
 
-            # Return blockiness score
             return 1 - (np.sum(changes) / (len(differences) - 1))
 
         # Convert attributions to numpy arrays
