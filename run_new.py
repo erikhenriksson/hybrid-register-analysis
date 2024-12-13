@@ -391,8 +391,8 @@ class RegisterHybridityAnalyzer:
                 attr_arrays[class1],
                 attr_arrays[class2],
                 tokens,  # Pass the tokens here
-                threshold=0.1,
-                pooling="mean",  # or 'max'
+                threshold=0.25,
+                pooling="max",  # or 'max'
             )
             blockiness_scores.append(blockiness)
 
