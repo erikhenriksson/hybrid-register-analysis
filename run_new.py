@@ -130,7 +130,7 @@ class RegisterHybridityAnalyzer:
             attrs = (attrs - attrs.mean()) / (attrs.std() + 1e-10)
             normalized_attrs[class_idx] = attrs
 
-        # 1. Local Coherence Score (original)
+        # 1. Local Coherence Score
         coherence_scores = []
         for attrs in normalized_attrs.values():
             local_coherence = np.mean(np.abs(attrs[1:] - attrs[:-1]))
@@ -138,90 +138,158 @@ class RegisterHybridityAnalyzer:
         scores["local_coherence"] = np.mean(coherence_scores)
 
         # 2. Spatial Clustering Score
-        def compute_spatial_clustering(attrs, window_size=3):
-            """Compute how much similar attribution values cluster together."""
-            clustering_score = 0
-            for i in range(len(attrs) - window_size):
-                window = attrs[i : i + window_size]
-                clustering_score += np.var(window)  # Lower variance = more clustering
-            return clustering_score / (len(attrs) - window_size)
+        def compute_spatial_clustering(attrs_dict, window_size=3):
+            """
+            Compute spatial clustering comparing attributions between classes.
+            Higher score means more discrete separation between classes.
+            """
+            classes = list(attrs_dict.keys())
+            n_tokens = len(next(iter(attrs_dict.values())))
 
-        clustering_scores = []
-        for attrs in normalized_attrs.values():
-            clustering_scores.append(compute_spatial_clustering(attrs))
-        scores["spatial_clustering"] = np.mean(clustering_scores)
+            dominance_scores = []
+            for i in range(n_tokens - window_size + 1):
+                window_scores = {}
+                for class_idx in classes:
+                    window = attrs_dict[class_idx][i : i + window_size]
+                    window_scores[class_idx] = np.mean(np.abs(window))
+
+                sorted_scores = sorted(window_scores.values(), reverse=True)
+                if len(sorted_scores) > 1:
+                    dominance = (sorted_scores[0] - sorted_scores[1]) / (
+                        sum(sorted_scores) + 1e-10
+                    )
+                    dominance_scores.append(dominance)
+
+            return np.mean(dominance_scores)
+
+        scores["spatial_clustering"] = compute_spatial_clustering(normalized_attrs)
 
         # 3. Attribution Entropy
-        def compute_entropy(attrs, bins=10):
-            """Compute entropy of attribution distribution."""
-            hist, _ = np.histogram(attrs, bins=bins, density=True)
-            hist = hist[hist > 0]  # Remove zero probabilities
-            return -np.sum(hist * np.log2(hist))
+        def compute_attribution_entropy(attrs_dict, window_size=3):
+            """
+            Compute entropy of class mixtures across the text.
+            Lower entropy indicates more discrete separation.
+            """
+            n_tokens = len(next(iter(attrs_dict.values())))
+            n_classes = len(attrs_dict)
 
-        entropy_scores = []
-        for attrs in normalized_attrs.values():
-            entropy_scores.append(compute_entropy(attrs))
-        scores["attribution_entropy"] = np.mean(entropy_scores)
+            entropies = []
+            for i in range(n_tokens - window_size + 1):
+                window_props = []
+                total_attr = 0
+                for attrs in attrs_dict.values():
+                    window = np.abs(attrs[i : i + window_size])
+                    window_props.append(np.sum(window))
+                    total_attr += np.sum(window)
+
+                if total_attr > 0:
+                    window_props = np.array(window_props) / total_attr
+                    probs = window_props[window_props > 0]
+                    window_entropy = -np.sum(probs * np.log2(probs))
+                    max_entropy = np.log2(n_classes)
+                    normalized_entropy = window_entropy / max_entropy
+                    entropies.append(normalized_entropy)
+
+            return np.mean(entropies)
+
+        scores["attribution_entropy"] = compute_attribution_entropy(normalized_attrs)
 
         # 4. Pure vs Mixed Segments Ratio
-        def compute_segment_ratio(attrs_dict, threshold=0.5):
-            """Compute ratio of pure to mixed segments."""
+        def compute_segment_ratio(attrs_dict, window_size=3):
+            """
+            Compute ratio of pure to mixed segments using sliding windows.
+            """
             n_tokens = len(next(iter(attrs_dict.values())))
-            pure_segments = 0
-            mixed_segments = 0
+            pure_windows = 0
+            mixed_windows = 0
 
-            for i in range(n_tokens):
-                token_attrs = [abs(attrs[i]) for attrs in attrs_dict.values()]
-                max_attr = max(token_attrs)
-                if max_attr > threshold:
-                    # Check if one class strongly dominates
-                    if max_attr > 2 * sum(
-                        sorted(token_attrs)[:-1]
-                    ):  # One class has more attribution than all others combined
-                        pure_segments += 1
+            for i in range(n_tokens - window_size + 1):
+                window_avgs = {}
+                for class_idx, attrs in attrs_dict.items():
+                    window = np.abs(attrs[i : i + window_size])
+                    window_avgs[class_idx] = np.mean(window)
+
+                sorted_attrs = sorted(window_avgs.values(), reverse=True)
+
+                if len(sorted_attrs) > 1:
+                    dominance_ratio = sorted_attrs[0] / (sorted_attrs[1] + 1e-10)
+                    if dominance_ratio > 1.5:
+                        pure_windows += 1
                     else:
-                        mixed_segments += 1
+                        mixed_windows += 1
 
-            return pure_segments / (mixed_segments + 1e-10)  # Avoid division by zero
+            return pure_windows / (mixed_windows + 1e-10)
 
         scores["pure_mixed_ratio"] = compute_segment_ratio(normalized_attrs)
 
-        # 5. Class Dominance Alternation
-        def compute_dominance_alternation(attrs_dict):
-            """Compute how often the dominant class changes across tokens."""
+        # 5. Class Dominance Alternation (improved version)
+        def compute_dominance_alternation(
+            attrs_dict, window_size=3, significance_threshold=1.2
+        ):
+            """
+            Compute meaningful changes in class dominance across the text.
+
+            Args:
+                attrs_dict: Dictionary of attributions per class
+                window_size: Size of sliding window
+                significance_threshold: How much stronger a class needs to be to be considered dominant
+
+            Returns:
+                Score between 0 and 1, where:
+                - Higher score = more alternation between clearly dominant classes
+                - Lower score = either stable dominance or no clear dominance
+            """
             n_tokens = len(next(iter(attrs_dict.values())))
-            dominant_classes = []
+            window_dominance = []
 
-            for i in range(n_tokens):
-                token_attrs = {
-                    class_idx: abs(attrs[i]) for class_idx, attrs in attrs_dict.items()
-                }
-                dominant_class = max(token_attrs.items(), key=lambda x: x[1])[0]
-                dominant_classes.append(dominant_class)
+            # For each window, find dominant class if any
+            for i in range(n_tokens - window_size + 1):
+                # Get average attribution for each class in window
+                window_avgs = {}
+                for class_idx, attrs in attrs_dict.items():
+                    window = np.abs(attrs[i : i + window_size])
+                    window_avgs[class_idx] = np.mean(window)
 
-            # Count changes in dominance
-            changes = sum(
-                1
-                for i in range(len(dominant_classes) - 1)
-                if dominant_classes[i] != dominant_classes[i + 1]
-            )
-            return changes / (n_tokens - 1)
+                # Sort classes by attribution
+                sorted_classes = sorted(
+                    window_avgs.items(), key=lambda x: x[1], reverse=True
+                )
+
+                # Check if highest is significantly stronger than second
+                if len(sorted_classes) > 1:
+                    ratio = sorted_classes[0][1] / (sorted_classes[1][1] + 1e-10)
+                    if ratio > significance_threshold:
+                        window_dominance.append(
+                            sorted_classes[0][0]
+                        )  # Store dominant class
+                    else:
+                        window_dominance.append(None)  # No clear dominance
+
+            # Count significant changes in dominance
+            significant_changes = 0
+            prev_dominant = window_dominance[0]
+
+            for curr_dominant in window_dominance[1:]:
+                if curr_dominant is not None and prev_dominant is not None:
+                    if curr_dominant != prev_dominant:
+                        significant_changes += 1
+                prev_dominant = curr_dominant
+
+            # Normalize by number of possible changes
+            possible_changes = len(window_dominance) - 1
+            return significant_changes / possible_changes if possible_changes > 0 else 0
 
         scores["dominance_alternation"] = compute_dominance_alternation(
             normalized_attrs
         )
 
-        # Compute final discreteness score (weighted combination of all metrics)
-        # Higher score indicates more discrete separation
+        # Compute final discreteness score
         scores["overall_discreteness"] = (
-            0.3 * scores["local_coherence"]
-            + 0.2 * scores["spatial_clustering"]
-            + 0.2
-            * (
-                1 - scores["attribution_entropy"]
-            )  # Lower entropy indicates more discreteness
+            0.25 * scores["local_coherence"]
+            + 0.25 * scores["spatial_clustering"]
+            + 0.25 * (1 - scores["attribution_entropy"])
             + 0.15 * scores["pure_mixed_ratio"]
-            + 0.15 * scores["dominance_alternation"]
+            + 0.10 * scores["dominance_alternation"]
         )
 
         return scores, attributions, tokens, true_positives
