@@ -105,6 +105,7 @@ class RegisterHybridityAnalyzer:
 
         return class_attributions, token_list, true_positives
 
+    '''
     def analyze_hybridity(
         self, text: str, true_classes: List[int]
     ) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
@@ -291,6 +292,75 @@ class RegisterHybridityAnalyzer:
             + 0.15 * scores["pure_mixed_ratio"]
             + 0.10 * scores["dominance_alternation"]
         )
+
+        return scores, attributions, tokens, true_positives
+    '''
+
+    def analyze_hybridity(
+        self, text: str, true_classes: List[int]
+    ) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
+        """
+        Analyze hybridity type using blockiness metric.
+        Returns:
+            - Dictionary of scores
+            - Token attributions
+            - Tokens
+            - True positive classes
+        """
+        result = self.compute_token_attributions(text, true_classes)
+        if result is None:
+            return None
+
+        attributions, tokens, true_positives = result
+        scores = {}
+
+        def normalize_attributions(attrs):
+            """Normalize attribution values."""
+            attrs = attrs - attrs.mean()
+            std = attrs.std()
+            if std > 0:
+                attrs = attrs / std
+            return attrs
+
+        def get_overall_blockiness(attrs_class1, attrs_class2, threshold=0.1):
+            """
+            Calculate overall blockiness by comparing attribution patterns between classes.
+            Returns a score between 0 (very blended) and 1 (very blocky).
+            """
+            # Normalize both attribution patterns
+            norm_attrs1 = normalize_attributions(torch.tensor(attrs_class1))
+            norm_attrs2 = normalize_attributions(torch.tensor(attrs_class2))
+
+            # Get only positive attributions
+            pos_attrs1 = np.maximum(norm_attrs1.numpy(), 0)
+            pos_attrs2 = np.maximum(norm_attrs2.numpy(), 0)
+
+            # Calculate the difference between attribution patterns
+            differences = np.abs(pos_attrs1 - pos_attrs2)
+
+            # Calculate how often the dominant class switches
+            changes = np.abs(np.diff(differences)) > threshold
+
+            # Return blockiness score
+            return 1 - (np.sum(changes) / (len(differences) - 1))
+
+        # Convert attributions to numpy arrays
+        attr_arrays = {
+            class_idx: attrs.numpy() for class_idx, attrs in attributions.items()
+        }
+
+        # Calculate blockiness for each pair of classes
+        blockiness_scores = []
+        class_pairs = list(itertools.combinations(attr_arrays.keys(), 2))
+
+        for class1, class2 in class_pairs:
+            blockiness = get_overall_blockiness(
+                attr_arrays[class1], attr_arrays[class2]
+            )
+            blockiness_scores.append(blockiness)
+
+        # Average blockiness across all pairs
+        scores["blockiness"] = np.mean(blockiness_scores)
 
         return scores, attributions, tokens, true_positives
 
