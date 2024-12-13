@@ -246,7 +246,7 @@ if __name__ == "__main__":
     print(f"Analyzing {len(df)} texts...")
     results = []
 
-    for idx, row in tqdm(df.iloc[:100].iterrows(), desc="Processing texts"):
+    for idx, row in tqdm(df.iloc[:10000].iterrows(), desc="Processing texts"):
         true_classes = analyzer.get_true_classes(row["register"])
 
         # Skip if not multiple true classes in main classes
