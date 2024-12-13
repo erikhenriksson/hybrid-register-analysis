@@ -105,29 +105,125 @@ class RegisterHybridityAnalyzer:
 
         return class_attributions, token_list, true_positives
 
-    def analyze_hybridity(
-        self, text: str, true_classes: List[int]
-    ) -> Tuple[float, Dict[int, torch.Tensor], List[str], List[int]]:
-        """
-        Analyze hybridity type (discrete vs blend).
-        Returns score, attributions, tokens, and true positive classes.
-        """
-        result = self.compute_token_attributions(text, true_classes)
-        if result is None:
-            return None
 
-        attributions, tokens, true_positives = result
-        clustering_scores = []
+def analyze_hybridity(
+    self, text: str, true_classes: List[int]
+) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
+    """
+    Analyze hybridity type using multiple metrics.
+    Returns:
+        - Dictionary of scores (various metrics)
+        - Token attributions
+        - Tokens
+        - True positive classes
+    """
+    result = self.compute_token_attributions(text, true_classes)
+    if result is None:
+        return None
 
-        for class_idx, attrs in attributions.items():
-            # Normalize attributions
-            attrs = (attrs - attrs.mean()) / (attrs.std() + 1e-10)
+    attributions, tokens, true_positives = result
+    scores = {}
 
-            # Calculate local coherence
-            local_coherence = torch.mean(torch.abs(attrs[1:] - attrs[:-1]))
-            clustering_scores.append(local_coherence.item())
+    # Normalize attributions for each class
+    normalized_attrs = {}
+    for class_idx, attrs in attributions.items():
+        attrs = attrs.numpy()  # Convert to numpy for easier computation
+        attrs = (attrs - attrs.mean()) / (attrs.std() + 1e-10)
+        normalized_attrs[class_idx] = attrs
 
-        return np.mean(clustering_scores), attributions, tokens, true_positives
+    # 1. Local Coherence Score (original)
+    coherence_scores = []
+    for attrs in normalized_attrs.values():
+        local_coherence = np.mean(np.abs(attrs[1:] - attrs[:-1]))
+        coherence_scores.append(local_coherence)
+    scores["local_coherence"] = np.mean(coherence_scores)
+
+    # 2. Spatial Clustering Score
+    def compute_spatial_clustering(attrs, window_size=3):
+        """Compute how much similar attribution values cluster together."""
+        clustering_score = 0
+        for i in range(len(attrs) - window_size):
+            window = attrs[i : i + window_size]
+            clustering_score += np.var(window)  # Lower variance = more clustering
+        return clustering_score / (len(attrs) - window_size)
+
+    clustering_scores = []
+    for attrs in normalized_attrs.values():
+        clustering_scores.append(compute_spatial_clustering(attrs))
+    scores["spatial_clustering"] = np.mean(clustering_scores)
+
+    # 3. Attribution Entropy
+    def compute_entropy(attrs, bins=10):
+        """Compute entropy of attribution distribution."""
+        hist, _ = np.histogram(attrs, bins=bins, density=True)
+        hist = hist[hist > 0]  # Remove zero probabilities
+        return -np.sum(hist * np.log2(hist))
+
+    entropy_scores = []
+    for attrs in normalized_attrs.values():
+        entropy_scores.append(compute_entropy(attrs))
+    scores["attribution_entropy"] = np.mean(entropy_scores)
+
+    # 4. Pure vs Mixed Segments Ratio
+    def compute_segment_ratio(attrs_dict, threshold=0.5):
+        """Compute ratio of pure to mixed segments."""
+        n_tokens = len(next(iter(attrs_dict.values())))
+        pure_segments = 0
+        mixed_segments = 0
+
+        for i in range(n_tokens):
+            token_attrs = [abs(attrs[i]) for attrs in attrs_dict.values()]
+            max_attr = max(token_attrs)
+            if max_attr > threshold:
+                # Check if one class strongly dominates
+                if max_attr > 2 * sum(
+                    sorted(token_attrs)[:-1]
+                ):  # One class has more attribution than all others combined
+                    pure_segments += 1
+                else:
+                    mixed_segments += 1
+
+        return pure_segments / (mixed_segments + 1e-10)  # Avoid division by zero
+
+    scores["pure_mixed_ratio"] = compute_segment_ratio(normalized_attrs)
+
+    # 5. Class Dominance Alternation
+    def compute_dominance_alternation(attrs_dict):
+        """Compute how often the dominant class changes across tokens."""
+        n_tokens = len(next(iter(attrs_dict.values())))
+        dominant_classes = []
+
+        for i in range(n_tokens):
+            token_attrs = {
+                class_idx: abs(attrs[i]) for class_idx, attrs in attrs_dict.items()
+            }
+            dominant_class = max(token_attrs.items(), key=lambda x: x[1])[0]
+            dominant_classes.append(dominant_class)
+
+        # Count changes in dominance
+        changes = sum(
+            1
+            for i in range(len(dominant_classes) - 1)
+            if dominant_classes[i] != dominant_classes[i + 1]
+        )
+        return changes / (n_tokens - 1)
+
+    scores["dominance_alternation"] = compute_dominance_alternation(normalized_attrs)
+
+    # Compute final discreteness score (weighted combination of all metrics)
+    # Higher score indicates more discrete separation
+    scores["overall_discreteness"] = (
+        0.3 * scores["local_coherence"]
+        + 0.2 * scores["spatial_clustering"]
+        + 0.2
+        * (
+            1 - scores["attribution_entropy"]
+        )  # Lower entropy indicates more discreteness
+        + 0.15 * scores["pure_mixed_ratio"]
+        + 0.15 * scores["dominance_alternation"]
+    )
+
+    return scores, attributions, tokens, true_positives
 
 
 # Example usage
