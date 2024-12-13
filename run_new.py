@@ -407,7 +407,7 @@ class RegisterHybridityAnalyzer:
         true_classes: List[int],
         window_size=5,
         n_bins=10,
-        pooling="mean",
+        pooling="max",
     ) -> Tuple[Dict[str, float], Dict[int, torch.Tensor], List[str], List[int]]:
         """
         Analyze hybridity using mutual information between class attributions.
