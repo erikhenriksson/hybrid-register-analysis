@@ -60,8 +60,7 @@ class RegisterHybridityAnalyzer:
         self, text: str, true_classes: List[int]
     ) -> Optional[Tuple[Dict[int, torch.Tensor], List[str], List[int]]]:
         """
-        Compute LRP attributions for true positive classes.
-        Returns attributions, tokens, and true positive classes.
+        Compute DeepLift attributions for true positive classes.
         """
         # Tokenize input
         encoded = self.tokenizer(
@@ -78,18 +77,23 @@ class RegisterHybridityAnalyzer:
         if len(true_positives) <= 1:
             return None
 
-        # Initialize LRP
-        lrp = DeepLift(self.model)
+        # Create a wrapper for the forward function that returns only logits
+        def forward_wrapper(input_ids, attention_mask):
+            return self.model(input_ids, attention_mask=attention_mask).logits[:, :9]
+
+        # Initialize DeepLift with the wrapper
+        deep_lift = DeepLift(forward_wrapper)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
         # Store attributions for each true positive class
         attributions = {}
         for class_idx in true_positives:
-            # Compute LRP attributions
-            attr = lrp.attribute(
+            # Compute DeepLift attributions
+            attr = deep_lift.attribute(
                 input_ids,
                 target=int(class_idx),
                 additional_forward_args=(attention_mask,),
+                baselines=input_ids * 0 + self.tokenizer.pad_token_id,
             )
 
             # Get attribution scores and mask padding
