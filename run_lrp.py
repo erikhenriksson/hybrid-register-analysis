@@ -77,12 +77,21 @@ class RegisterHybridityAnalyzer:
         if len(true_positives) <= 1:
             return None
 
-        # Create a wrapper for the forward function that returns only logits
-        def forward_wrapper(input_ids, attention_mask):
-            return self.model(input_ids, attention_mask=attention_mask).logits[:, :9]
+        # Create a wrapper module
+        class ModelWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+
+            def forward(self, input_ids, attention_mask):
+                return self.model(input_ids, attention_mask=attention_mask).logits[
+                    :, :9
+                ]
+
+        wrapped_model = ModelWrapper(self.model)
 
         # Initialize DeepLift with the wrapper
-        deep_lift = DeepLift(forward_wrapper)
+        deep_lift = DeepLift(wrapped_model)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
         # Store attributions for each true positive class
