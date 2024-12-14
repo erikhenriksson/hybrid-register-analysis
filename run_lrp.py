@@ -69,6 +69,10 @@ class RegisterHybridityAnalyzer:
         input_ids = encoded["input_ids"].to(self.device)
         attention_mask = encoded["attention_mask"].to(self.device)
 
+        # Make input_ids require gradients
+        input_ids = input_ids.detach().clone()
+        input_ids.requires_grad = True
+
         # Get predictions and find true positives
         probs, predicted_classes = self.predict_probs(text)
         true_positives = list(set(true_classes) & set(predicted_classes))
@@ -94,6 +98,11 @@ class RegisterHybridityAnalyzer:
         deep_lift = DeepLift(wrapped_model)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
+        # Create baseline with gradients
+        baseline = torch.ones_like(input_ids) * self.tokenizer.pad_token_id
+        baseline = baseline.to(self.device)
+        baseline.requires_grad = True
+
         # Store attributions for each true positive class
         attributions = {}
         for class_idx in true_positives:
@@ -102,7 +111,7 @@ class RegisterHybridityAnalyzer:
                 input_ids,
                 target=int(class_idx),
                 additional_forward_args=(attention_mask,),
-                baselines=input_ids * 0 + self.tokenizer.pad_token_id,
+                baselines=baseline,
             )
 
             # Get attribution scores and mask padding
