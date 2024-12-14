@@ -2,7 +2,8 @@ import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import pandas as pd
 import numpy as np
-from captum.attr import LRP
+from captum.attr import DeepLift
+
 from typing import List, Tuple, Dict, Optional
 from tqdm import tqdm
 import itertools
@@ -78,7 +79,7 @@ class RegisterHybridityAnalyzer:
             return None
 
         # Initialize LRP
-        lrp = LRP(self.model)
+        lrp = deepLift(self.model)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
         # Store attributions for each true positive class
