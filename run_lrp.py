@@ -79,7 +79,7 @@ class RegisterHybridityAnalyzer:
             return None
 
         # Initialize LRP
-        lrp = deepLift(self.model)
+        lrp = DeepLift(self.model)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
         # Store attributions for each true positive class
