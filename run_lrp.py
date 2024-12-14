@@ -69,9 +69,21 @@ class RegisterHybridityAnalyzer:
         input_ids = encoded["input_ids"].to(self.device)
         attention_mask = encoded["attention_mask"].to(self.device)
 
-        # Make input_ids require gradients
-        input_ids = input_ids.detach().clone()
-        input_ids.requires_grad = True
+        # Create embedding layer wrapper for attribution
+        class EmbeddingWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+                self.embed = model.roberta.embeddings.word_embeddings
+
+            def forward(self, inputs, attention_mask):
+                embeddings = self.embed(inputs)
+                # Now embeddings are floating point and can have gradients
+                return self.model(
+                    inputs_embeds=embeddings, attention_mask=attention_mask
+                ).logits[:, :9]
+
+        wrapped_model = EmbeddingWrapper(self.model)
 
         # Get predictions and find true positives
         probs, predicted_classes = self.predict_probs(text)
@@ -81,27 +93,9 @@ class RegisterHybridityAnalyzer:
         if len(true_positives) <= 1:
             return None
 
-        # Create a wrapper module
-        class ModelWrapper(torch.nn.Module):
-            def __init__(self, model):
-                super().__init__()
-                self.model = model
-
-            def forward(self, input_ids, attention_mask):
-                return self.model(input_ids, attention_mask=attention_mask).logits[
-                    :, :9
-                ]
-
-        wrapped_model = ModelWrapper(self.model)
-
         # Initialize DeepLift with the wrapper
         deep_lift = DeepLift(wrapped_model)
         token_list = self.tokenizer.convert_ids_to_tokens(input_ids[0])
-
-        # Create baseline with gradients
-        baseline = torch.ones_like(input_ids) * self.tokenizer.pad_token_id
-        baseline = baseline.to(self.device)
-        baseline.requires_grad = True
 
         # Store attributions for each true positive class
         attributions = {}
@@ -111,7 +105,7 @@ class RegisterHybridityAnalyzer:
                 input_ids,
                 target=int(class_idx),
                 additional_forward_args=(attention_mask,),
-                baselines=baseline,
+                baselines=input_ids * 0 + self.tokenizer.pad_token_id,
             )
 
             # Get attribution scores and mask padding
