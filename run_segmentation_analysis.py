@@ -7,6 +7,9 @@ from nltk.tokenize import word_tokenize
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+import nltk
+nltk.download('punkt_tab')
+
 # Load models
 model_name = "TurkuNLP/web-register-classification-multilingual"
 tokenizer_name = "xlm-roberta-large"
