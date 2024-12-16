@@ -67,34 +67,51 @@ def truncate_text_to_tokens(text):
     return truncated_text
 
 
-def combine_short_sentences(sentences, min_words=MIN_WORDS):
-    """Combine sentences to ensure no segment has fewer than min_words words."""
-    if not sentences:
-        return []
+def combine_short_sentences(sentences, min_words=MIN_WORDS, max_segments=20):
+    """
+    Combine sentences adaptively by increasing min_words until we get fewer than max_segments.
+    """
 
-    combined_sentences = []
-    current_segment = []
-    current_count = 0
+    def _combine_with_min_words(sentences, min_words):
+        if not sentences:
+            return []
 
-    for sentence in sentences:
-        word_count = len(word_tokenize(sentence))
+        combined_sentences = []
+        current_segment = []
+        current_count = 0
 
-        # Add to the current segment if it's under the limit
-        if current_count + word_count < min_words:
-            current_segment.append(sentence)
-            current_count += word_count
-        else:
-            # If current segment has enough words, start a new one
-            if current_segment:
-                combined_sentences.append(" ".join(current_segment))
-            current_segment = [sentence]
-            current_count = word_count
+        for sentence in sentences:
+            word_count = len(word_tokenize(sentence))
 
-    # Add the last segment
-    if current_segment:
-        combined_sentences.append(" ".join(current_segment))
+            if current_count + word_count < min_words:
+                current_segment.append(sentence)
+                current_count += word_count
+            else:
+                if current_segment:
+                    combined_sentences.append(" ".join(current_segment))
+                current_segment = [sentence]
+                current_count = word_count
 
-    return combined_sentences
+        if current_segment:
+            combined_sentences.append(" ".join(current_segment))
+
+        return combined_sentences
+
+    # Start with initial min_words
+    current_min_words = min_words
+    while True:
+        combined = _combine_with_min_words(sentences, current_min_words)
+        if len(combined) <= max_segments:
+            print(
+                f"Combined to {len(combined)} segments with min_words={current_min_words}"
+            )
+            return combined
+
+        # Increase min_words by 50% each iteration
+        current_min_words = int(current_min_words * 1.5)
+        print(
+            f"Too many segments ({len(combined)}), increasing min_words to {current_min_words}"
+        )
 
 
 def generate_ordered_partitions(sentences):
