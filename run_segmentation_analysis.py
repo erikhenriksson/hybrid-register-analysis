@@ -7,8 +7,9 @@ from nltk.tokenize import word_tokenize
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-import nltk
-nltk.download('punkt_tab')
+# At the start of your script
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 # Load models
 model_name = "TurkuNLP/web-register-classification-multilingual"
@@ -16,6 +17,8 @@ tokenizer_name = "xlm-roberta-large"
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
+model = model.to(device)
+model.eval()
 # Get label mapping - only first 9 labels
 label_names = {i: model.config.id2label[i] for i in range(9)}
 label_to_id = {v: k for k, v in label_names.items()}
@@ -40,8 +43,12 @@ def get_model_predictions(text):
     inputs = tokenizer(
         text, return_tensors="pt", truncation=True, padding=True, max_length=MAX_TOKENS
     )
+    # Move input tensors to GPU
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
     outputs = model(**inputs)
-    probs = torch.sigmoid(outputs.logits).squeeze().detach().numpy()
+    # Move predictions back to CPU before converting to numpy
+    probs = torch.sigmoid(outputs.logits).squeeze().detach().cpu().numpy()
 
     prediction_cache[text] = probs
     return probs
