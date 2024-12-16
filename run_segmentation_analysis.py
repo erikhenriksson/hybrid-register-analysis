@@ -6,6 +6,7 @@ import torch
 from nltk.tokenize import word_tokenize
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import psutil
 
 # At the start of your script
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -121,7 +122,14 @@ def generate_ordered_partitions(sentences):
     return all_partitions
 
 
+def log_memory_usage():
+
+    process = psutil.Process()
+    print(f"Memory usage: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+
+
 def analyze_hybrid_discreteness(text, true_labels):
+    log_memory_usage()
     print("-" * 50)
     prediction_cache.clear()
 
