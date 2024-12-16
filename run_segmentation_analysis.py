@@ -107,8 +107,8 @@ def combine_short_sentences(sentences, min_words=MIN_WORDS, max_segments=20):
             )
             return combined
 
-        # Increase min_words by 50% each iteration
-        current_min_words = int(current_min_words * 1.5)
+        # Increase min_words by 1 and try again
+        current_min_words += 1
         print(
             f"Too many segments ({len(combined)}), increasing min_words to {current_min_words}"
         )
@@ -152,7 +152,6 @@ def analyze_hybrid_discreteness(text, true_labels):
 
     # First truncate the text
     truncated_text = truncate_text_to_tokens(text)
-
     probs = get_model_predictions(truncated_text)
 
     pred_ids = [i for i, p in enumerate(probs[:9]) if p > threshold]
@@ -175,32 +174,27 @@ def analyze_hybrid_discreteness(text, true_labels):
     partitions = generate_ordered_partitions(sentences)
     print(f"Generated {len(partitions)} possible partitions")
 
-    # Initialize variables to track the best partition
     best_partition = None
     max_discreteness = float("-inf")
-    best_predictions_true = None  # To store predictions for the best partition
-    best_predictions_all = None  # To store predictions for the best partition
+    best_predictions_true = None
+    best_predictions_all = None
 
     for partition in partitions:
-        # Get predictions for each block in the partition
         block_predictions = [get_model_predictions(block) for block in partition]
 
-        # Compute discreteness for the current partition
         discreteness = sum(
             abs(block_pred[pred_ids[0]] - block_pred[pred_ids[1]])
             for block_pred in block_predictions
         ) / len(partition)
 
-        # Update the best partition if this one has higher discreteness
         if discreteness > max_discreteness:
             max_discreteness = discreteness
             best_partition = partition
-
-            # get the block predictions for this partition for the 2 labels
+            # Convert numpy arrays to simple lists before storing
             best_predictions_true = [
-                block_pred[pred_ids] for block_pred in block_predictions
+                block_pred[pred_ids].tolist() for block_pred in block_predictions
             ]
-            best_predictions_all = block_predictions
+            best_predictions_all = [pred.tolist() for pred in block_predictions]
 
     return {
         "true_positive": True,
@@ -229,22 +223,27 @@ def process_tsv_file(file_path):
 
     print(df)
 
-    # Enable tqdm for pandas DataFrame iteration
-    results = [
-        {
-            **analyze_hybrid_discreteness(row["text"], row["labels"]),
-            "id": idx,
-            "true_labels": row["labels"],
-        }
-        for idx, row in tqdm(
-            df.iterrows(), total=df.shape[0], desc="Analyzing documents"
-        )
-    ]
+    # Process documents and store results
+    results = []
+    for idx, row in tqdm(df.iterrows(), total=df.shape[0], desc="Analyzing documents"):
+        result = analyze_hybrid_discreteness(row["text"], row["labels"])
+        if result.get("true_positive"):
+            result["id"] = idx
+            result["true_labels"] = row["labels"]
+            results.append(result)
 
-    # Filter results to retain only where true_positive = True
-    results = [result for result in results if result.get("true_positive")]
+    # Create DataFrame and save
     df_results = pd.DataFrame(results)
+
+    # Ensure all numpy arrays are converted to lists before saving
+    for col in ["best_predictions_true", "best_predictions_all"]:
+        if col in df_results.columns:
+            df_results[col] = df_results[col].apply(
+                lambda x: x if isinstance(x, list) else x.tolist()
+            )
+
     df_results.to_csv("hybrid_discreteness_results.csv", index=False)
+    return results
 
 
 results = process_tsv_file("fi_all.tsv")
