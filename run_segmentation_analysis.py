@@ -1,4 +1,5 @@
 from itertools import combinations
+import sys
 
 import pandas as pd
 import spacy
@@ -242,8 +243,15 @@ def process_tsv_file(file_path):
                 lambda x: x if isinstance(x, list) else x.tolist()
             )
 
-    df_results.to_csv("hybrid_discreteness_results.csv", index=False)
+    df_results.to_csv(
+        f"hybrid_discreteness_results_{file_path.split('.')[0].split('/')[-1]}.csv",
+        index=False,
+    )
     return results
 
 
-results = process_tsv_file("fi_all.tsv")
+# Get file name from sys argv
+file_name = sys.argv[1]
+
+
+results = process_tsv_file(file_name)
