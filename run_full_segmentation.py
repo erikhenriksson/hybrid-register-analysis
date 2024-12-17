@@ -222,6 +222,7 @@ def process_file(file_path):
 
         for idx, line in tqdm(enumerate(f), total=total_lines):
             text = line.strip()
+            result = line[line.find("\t") + 1 :]
             if not text:
                 print(f"Skipping empty line at index {idx}")
                 continue
