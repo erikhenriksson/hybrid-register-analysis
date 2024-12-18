@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import spacy
+from tqdm import tqdm
 
 # Load models
 model_name = "TurkuNLP/web-register-classification-multilingual"
@@ -125,7 +126,12 @@ def generate_partitionings_with_entropy(sentences):
     """Generate partitionings and find the one with maximum entropy."""
     subsequences = generate_unique_subsequences(sentences)
 
-    predictions = [predict(" ".join(subseq)) for subseq in subsequences]
+    print("Subsequences: ", len(subsequences))
+
+    predictions = []
+
+    for subseq in tqdm(subsequences):
+        predictions.append(predict(" ".join(subseq)))
 
     n = len(sentences)
 
@@ -143,6 +149,8 @@ def generate_partitionings_with_entropy(sentences):
 
     results = []
     build_partitions([], 0)
+
+    print("Partitions: ", len(results))
 
     # Calculate average entropy for each partitioning
     max_entropy = -float("inf")
@@ -174,44 +182,40 @@ def process_tsv_file(input_file_path, output_file_path):
     """Process texts from a TSV file and generate predictions, saving results to JSONL."""
     # Read TSV file
     df = pd.read_csv(input_file_path, sep="\t", header=None)
-
-    # Create or truncate the output file
-    Path(output_file_path).parent.mkdir(parents=True, exist_ok=True)
-
     # Process each text and write results to JSONL
-    with open(output_file_path, "w", encoding="utf-8") as f:
-        for idx, text in enumerate(df[1]):
-            # Split text into sentences
-            sentences = split_into_sentences(text)
 
-            # Combine short sentences
-            combined_sentences = combine_short_sentences(sentences)
+    for idx, text in enumerate(df[1]):
+        # Split text into sentences
+        sentences = split_into_sentences(text)
 
-            # Generate partitions and predictions
-            best_partition, partition_probs, max_entropy = (
-                generate_partitionings_with_entropy(combined_sentences)
-            )
+        # Combine short sentences
+        combined_sentences = combine_short_sentences(sentences)
 
-            # Create result dictionary
-            result = {
-                "best_partition": best_partition,
-                "partition_probs": [
-                    [round(float(prob), 3) for prob in probs]
-                    for probs in partition_probs
-                ],
-                "max_entropy": round(float(max_entropy), 3),
-            }
+        # Generate partitions and predictions
+        best_partition, partition_probs, max_entropy = (
+            generate_partitionings_with_entropy(combined_sentences)
+        )
 
-            # Write to JSONL file
+        # Create result dictionary
+        result = {
+            "best_partition": best_partition,
+            "partition_probs": [
+                [round(float(prob), 3) for prob in probs] for probs in partition_probs
+            ],
+            "max_entropy": round(float(max_entropy), 3),
+        }
+
+        # Write to JSONL file
+        with open(output_file_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(result, ensure_ascii=False) + "\n")
 
-            # Print progress and results
-            print(f"\nProcessed text {idx + 1}/{len(df)}")
-            print("Predictions for each part:")
-            for part, probs in zip(best_partition, partition_probs):
-                print(f"{' '.join(part)}: {probs}")
-            print("Maximum average entropy:", max_entropy)
-            print("-" * 80)
+        # Print progress and results
+        print(f"\nProcessed text {idx + 1}/{len(df)}")
+        print("Predictions for each part:")
+        for part, probs in zip(best_partition, partition_probs):
+            print(f"{' '.join(part)}: {probs}")
+        print("Maximum average entropy:", max_entropy)
+        print("-" * 80)
 
 
 # Example usage
