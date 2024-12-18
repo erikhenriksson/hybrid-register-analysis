@@ -185,8 +185,11 @@ def process_tsv_file(input_file_path, output_file_path):
     # Process each text and write results to JSONL
 
     for idx, text in enumerate(df[1]):
+
+        truncated_text = truncate_text_to_tokens(text)
+
         # Split text into sentences
-        sentences = split_into_sentences(text)
+        sentences = split_into_sentences(truncated_text)
 
         # Combine short sentences
         combined_sentences = combine_short_sentences(sentences)
