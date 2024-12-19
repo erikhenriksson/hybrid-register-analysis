@@ -2,7 +2,7 @@ import numpy as np
 from math import log2
 import torch
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, AutoModelForSequenceClassification
 import pandas as pd
 import json
 from pathlib import Path
