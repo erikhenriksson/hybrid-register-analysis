@@ -296,10 +296,11 @@ def process_tsv_file(input_file_path, output_file_path):
         # Create result dictionary
         result = {
             "best_partition": best_partition,
-            "partition_probs": partition_probs,
-            "max_score": max_score,
+            "partition_probs": [
+                [float(prob) for prob in probs] for probs in partition_probs
+            ],  # Convert numpy float32 to Python float
+            "max_score": float(max_score),  # Convert to Python float
         }
-
         # Write to JSONL file
         with open(output_file_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(result, ensure_ascii=False) + "\n")
