@@ -8,6 +8,7 @@ from pathlib import Path
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoModel
 import spacy
 from tqdm import tqdm
+import sys
 
 # Load register classification model
 model_name = "TurkuNLP/web-register-classification-multilingual"
