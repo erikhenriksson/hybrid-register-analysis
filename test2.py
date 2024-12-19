@@ -273,6 +273,13 @@ def generate_partitionings_with_entropy(sentences):
     return best_partition_text, best_partition_probs, round(max_score, 3)
 
 
+def get_dominant_registers(probs, threshold=0.4):
+    """Get names of registers that pass the threshold."""
+    REGISTER_NAMES = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
+    dominant = [REGISTER_NAMES[i] for i, p in enumerate(probs) if p >= threshold]
+    return dominant if dominant else ["None"]
+
+
 def process_tsv_file(input_file_path, output_file_path):
     """Process texts from a TSV file and generate predictions, saving results to JSONL."""
     # Read TSV file
@@ -293,14 +300,15 @@ def process_tsv_file(input_file_path, output_file_path):
             generate_partitionings_with_entropy(combined_sentences)
         )
 
-        # Create result dictionary
+        # Create result dictionary with proper type conversion
         result = {
             "best_partition": best_partition,
             "partition_probs": [
                 [float(prob) for prob in probs] for probs in partition_probs
-            ],  # Convert numpy float32 to Python float
-            "max_score": float(max_score),  # Convert to Python float
+            ],
+            "max_score": float(max_score),
         }
+
         # Write to JSONL file
         with open(output_file_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -309,7 +317,10 @@ def process_tsv_file(input_file_path, output_file_path):
         print(f"\nProcessed text {idx + 1}/{len(df)}")
         print("Predictions for each part:")
         for part, probs in zip(best_partition, partition_probs):
-            print(f"{' '.join(part)}: {probs}")
+            dominant_registers = get_dominant_registers(probs)
+            print(f"Dominant registers: {', '.join(dominant_registers)}")
+            print(f"Text: {' '.join(part)}")
+            print(f"Probabilities: {probs}\n")
         print("Maximum combined score:", max_score)
         print("-" * 80)
 
