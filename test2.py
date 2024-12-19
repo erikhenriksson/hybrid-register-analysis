@@ -256,7 +256,7 @@ def generate_partitionings_with_entropy(sentences):
         semantic_score = calculate_semantic_difference(embeddings, partition_indices)
 
         # Combine scores with equal weights
-        combined_score = 0.5 * entropy_score + 0.5 * semantic_score
+        combined_score = -entropy_score + semantic_score
 
         if combined_score > max_score:
             max_score = combined_score
