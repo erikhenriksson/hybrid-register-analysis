@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 import spacy
+import sys
 
 # Load spaCy
 nlp = spacy.load("xx_ent_wiki_sm")
@@ -118,24 +119,30 @@ def get_segment_embeddings(texts, batch_size=32):
     """Get E5 embeddings for text segments using mean pooling."""
     all_embeddings = []
 
+    # Process texts in batches
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
 
         # E5 models expect prefix "passage: " for text embedding
         batch_texts = [f"passage: {text}" for text in batch_texts]
 
+        # Tokenize batch
         inputs = embed_tokenizer(
             batch_texts,
             return_tensors="pt",
-            padding=True,
             truncation=True,
+            padding=True,
             max_length=512,
-        ).to(device)
+        )
 
+        # Move input tensors to GPU
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Get embeddings
         with torch.no_grad():
             outputs = embed_model(**inputs)
 
-            # Mean pooling
+            # Mean pooling with attention mask
             attention_mask = inputs["attention_mask"]
             token_embeddings = outputs.last_hidden_state
             input_mask_expanded = (
@@ -144,9 +151,11 @@ def get_segment_embeddings(texts, batch_size=32):
             embeddings = torch.sum(
                 token_embeddings * input_mask_expanded, 1
             ) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            embeddings = embeddings.detach().cpu()
 
-        all_embeddings.append(embeddings.cpu())
+        all_embeddings.append(embeddings)
 
+    # Combine all batches
     return torch.cat(all_embeddings, dim=0)
 
 
@@ -168,18 +177,19 @@ def get_entropy_score(segments_predictions):
     return sum(entropies) / len(entropies)
 
 
-def get_semantic_difference_score(segment_texts):
-    """Higher is better - means segments are more different"""
-    if len(segment_texts) <= 1:
+def get_semantic_difference_score(partition_indices, segment_embeddings):
+    """Calculate semantic difference score from precomputed embeddings."""
+    if len(partition_indices) <= 1:
         return 0
 
-    embeddings = get_segment_embeddings(segment_texts)
-    embeddings = F.normalize(embeddings, p=2, dim=1)  # Normalize embeddings
+    # Get embeddings for this partition
+    partition_embeddings = segment_embeddings[partition_indices]
 
+    # Calculate differences between adjacent segments
     differences = []
-    for i in range(len(embeddings) - 1):
+    for i in range(len(partition_embeddings) - 1):
         similarity = F.cosine_similarity(
-            embeddings[i : i + 1], embeddings[i + 1 : i + 2]
+            partition_embeddings[i : i + 1], partition_embeddings[i + 1 : i + 2]
         )
         difference = 1 - similarity.item()
         differences.append(difference)
@@ -214,9 +224,13 @@ def generate_partitionings_with_pareto(sentences):
     subsequences = generate_unique_subsequences(sentences)
     print("Subsequences: ", len(subsequences))
 
-    # Get predictions
+    # Get predictions and embeddings for all unique subsequences
     texts = [" ".join(subseq) for subseq in subsequences]
     predictions = predict_batch(texts)
+
+    # Get embeddings for all unique subsequences
+    embeddings = get_segment_embeddings(texts)
+    embeddings = F.normalize(embeddings, p=2, dim=1)  # Normalize embeddings
 
     n = len(sentences)
 
@@ -242,10 +256,9 @@ def generate_partitionings_with_pareto(sentences):
 
     for partition_indices in tqdm(results):
         partition_preds = [predictions[idx] for idx in partition_indices]
-        partition_texts = [" ".join(subsequences[idx]) for idx in partition_indices]
 
         entropy_score = get_entropy_score(partition_preds)
-        semantic_score = get_semantic_difference_score(partition_texts)
+        semantic_score = get_semantic_difference_score(partition_indices, embeddings)
 
         if not is_pareto_dominated(scores, (entropy_score, semantic_score)):
             # Remove any solutions that this new solution dominates
@@ -315,7 +328,12 @@ def process_tsv_file(input_file_path, output_file_path):
                 print(f"Probabilities: {probs}")
 
 
+# Example usage
 if __name__ == "__main__":
-    input_file = "fi_all.tsv"
-    output_file = "pareto_results.jsonl"
+    # Get file name from sys argv
+    input_file = sys.argv[1]
+
+    # Output file, add _results before extension
+    output_file = input_file.replace(".tsv", "_results.jsonl")
+
     process_tsv_file(input_file, output_file)
