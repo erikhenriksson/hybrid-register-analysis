@@ -15,7 +15,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 max_tokens = 512
-min_words = 15
+min_words = 20
 max_groups = 20
 model = model.to(device)
 model.eval()
@@ -39,6 +39,40 @@ def predict(text):
 
     # Round to three decimals probs
     return [round(prob, 3) for prob in probs[:9]]
+
+
+def predict_batch(texts, batch_size=32):
+    """Predict probabilities for a batch of texts."""
+    all_probs = []
+
+    # Process texts in batches
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i : i + batch_size]
+
+        # Tokenize batch
+        inputs = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=512,
+        )
+
+        # Move input tensors to GPU
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Get predictions
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Move predictions back to CPU and convert to numpy
+        batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
+
+        # Round to three decimals and take first 9 probabilities
+        batch_probs = [[round(prob, 3) for prob in probs[:9]] for probs in batch_probs]
+        all_probs.extend(batch_probs)
+
+    return all_probs
 
 
 def combine_short_sentences(
@@ -114,24 +148,30 @@ def generate_unique_subsequences(sentences):
 
 
 def calculate_entropy(probs):
-    """Calculate entropy for a probability distribution."""
-    # Normalize probabilities to sum to 1
+    """Calculate binary entropy for each probability in multilabel classification."""
+
+    def binary_entropy(p):
+        # Handle edge cases to avoid log(0)
+        if p <= 0 or p >= 1:
+            return 0
+        # Calculate entropy for binary probability (p, 1-p)
+        return -(p * log2(p) + (1 - p) * log2(1 - p))
+
     probs = np.array(probs)
-    probs = probs / probs.sum()
-    # Calculate entropy
-    return -sum(p * log2(p) if p > 0 else 0 for p in probs)
+    # Calculate binary entropy for each probability
+    return sum(binary_entropy(p) for p in probs)
 
 
 def generate_partitionings_with_entropy(sentences):
     """Generate partitionings and find the one with maximum entropy."""
     subsequences = generate_unique_subsequences(sentences)
-
     print("Subsequences: ", len(subsequences))
 
-    predictions = []
+    # Prepare all texts for batch prediction
+    texts = [" ".join(subseq) for subseq in subsequences]
 
-    for subseq in tqdm(subsequences):
-        predictions.append(predict(" ".join(subseq)))
+    # Get predictions in batches
+    predictions = predict_batch(texts)
 
     n = len(sentences)
 
