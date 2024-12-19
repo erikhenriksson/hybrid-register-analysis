@@ -7,7 +7,12 @@ import pandas as pd
 import json
 from pathlib import Path
 from tqdm import tqdm
-import sys
+import spacy
+
+# Load spaCy
+nlp = spacy.load("xx_ent_wiki_sm")
+if "sentencizer" not in nlp.pipe_names:
+    nlp.add_pipe("sentencizer")
 
 # Load models
 model_name = "TurkuNLP/web-register-classification-multilingual"
@@ -25,6 +30,61 @@ model = model.to(device)
 embed_model = embed_model.to(device)
 model.eval()
 embed_model.eval()
+
+
+def split_into_sentences(text):
+    """Split text into sentences using spaCy."""
+    doc = nlp(text)
+    return [sent.text.strip() for sent in doc.sents]
+
+
+def combine_short_sentences(sentences, min_words=20, max_groups=20):
+    """Combine short sentences into longer segments."""
+    initial_min_words = min_words
+
+    def count_words(sentence):
+        return len(sentence.split())
+
+    while True:
+        result = []
+        buffer = ""
+
+        for sentence in sentences:
+            if count_words(sentence) >= min_words:
+                if buffer:
+                    result.append(buffer.strip())
+                    buffer = ""
+                result.append(sentence)
+            else:
+                buffer += (buffer and " ") + sentence
+
+                # If the buffer reaches min_words, finalize it
+                if count_words(buffer) >= min_words:
+                    result.append(buffer.strip())
+                    buffer = ""
+
+        # Handle leftover buffer
+        if buffer:
+            result.append(buffer.strip())
+
+        # Final pass: Ensure no sentences in the result are below min_words
+        i = 0
+        while i < len(result):
+            if count_words(result[i]) < min_words:
+                if i < len(result) - 1:  # Merge with next sentence
+                    result[i + 1] = result[i] + " " + result[i + 1]
+                    result.pop(i)
+                elif i > 0:  # Merge with previous sentence if last
+                    result[i - 1] += " " + result[i]
+                    result.pop(i)
+                else:  # Single short sentence case
+                    break
+            else:
+                i += 1
+
+        if len(result) <= max_groups:
+            return result
+        min_words += 1
 
 
 def predict_batch(texts, batch_size=32):
@@ -230,8 +290,14 @@ def process_tsv_file(input_file_path, output_file_path):
     for idx, text in enumerate(df[1]):
         print(f"\nProcessing text {idx + 1}/{len(df)}")
 
+        # First split into sentences
+        sentences = split_into_sentences(text)
+
+        # Combine short sentences if needed
+        sentences = combine_short_sentences(sentences)
+
         # Get Pareto-optimal segmentations
-        pareto_solutions = generate_partitionings_with_pareto([text])
+        pareto_solutions = generate_partitionings_with_pareto(sentences)
 
         # Save results
         result = {"text_id": idx, "pareto_solutions": pareto_solutions}
@@ -249,12 +315,7 @@ def process_tsv_file(input_file_path, output_file_path):
                 print(f"Probabilities: {probs}")
 
 
-# Example usage
 if __name__ == "__main__":
-    # Get file name from sys argv
-    input_file = sys.argv[1]
-
-    # Output file, add _results before extension
-    output_file = input_file.replace(".tsv", "_results.jsonl")
-
+    input_file = "fi_all.tsv"
+    output_file = "pareto_results.jsonl"
     process_tsv_file(input_file, output_file)
