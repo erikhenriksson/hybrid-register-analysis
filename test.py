@@ -3,10 +3,9 @@ from math import log2
 import torch
 import pandas as pd
 import json
-from pathlib import Path
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import spacy
-from tqdm import tqdm
+import sys
 
 # Load models
 model_name = "TurkuNLP/web-register-classification-multilingual"
@@ -263,6 +262,10 @@ def process_tsv_file(input_file_path, output_file_path):
 
 # Example usage
 if __name__ == "__main__":
-    input_file = "fi_all.tsv"  # Replace with your TSV file path
-    output_file = "results.jsonl"  # Output JSONL file path
+    # Get file name from sys argv
+    input_file = sys.argv[1]
+
+    # Output file, add _results before extension
+    output_file = input_file.replace(".tsv", "_results.jsonl")
+
     process_tsv_file(input_file, output_file)
