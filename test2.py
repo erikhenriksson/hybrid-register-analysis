@@ -140,12 +140,12 @@ def calculate_entropy(probs):
     return sum(binary_entropy(p) for p in probs)
 """
 
-
+"""
 def calculate_entropy(probs):
-    """
-    Calculate how discrete the probabilities are by measuring how close they are to 1.
-    Return value closer to 1 means more discrete (clearer signal).
-    """
+
+    #Calculate how discrete the probabilities are by measuring how close they are to 1.
+    #Return value closer to 1 means more discrete (clearer signal).
+    
     sorted_probs = sorted(probs, reverse=True)
     # Check how close highest probability is to 1
     max_strength = sorted_probs[0]
@@ -153,6 +153,21 @@ def calculate_entropy(probs):
     other_strengths = sum(p for p in sorted_probs[1:])
 
     return max_strength - (other_strengths / len(sorted_probs[1:]))
+"""
+
+
+def calculate_entropy(probs):
+    """
+    Measures both:
+    1. How strong is the strongest signal (close to 1)
+    2. How weak are other signals (close to 0)
+    """
+    sorted_probs = sorted(probs, reverse=True)
+
+    dominant_strength = sorted_probs[0]  # Should be high
+    other_signals = sum(sorted_probs[1:])  # Should be low
+
+    return dominant_strength - other_signals
 
 
 def combine_short_sentences(
