@@ -123,9 +123,10 @@ def calculate_semantic_difference(embeddings, partition_indices):
 
     return sum(differences) / len(differences)
 
+
 """
 def calculate_entropy(probs):
-    """Calculate binary entropy for each probability in multilabel classification."""
+    #Calculate binary entropy for each probability in multilabel classification.
 
     def binary_entropy(p):
         # Handle edge cases to avoid log(0)
@@ -138,6 +139,8 @@ def calculate_entropy(probs):
     # Calculate binary entropy for each probability
     return sum(binary_entropy(p) for p in probs)
 """
+
+
 def calculate_entropy(probs):
     """
     Calculate how discrete the probabilities are by measuring how close they are to 1.
