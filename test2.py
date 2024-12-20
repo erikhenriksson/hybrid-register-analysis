@@ -271,9 +271,9 @@ def generate_partitionings_with_entropy(sentences):
     results = []
     build_partitions([], 0)
 
-    print("Partitions: ", len(results))
-    print(results)
-    exit()
+    print("Sentences:", len(sentences))
+    print("Partitions:", len(results))
+
     # Find partition with best combined score
     max_score = -float("inf")
     best_partition_indices = None
