@@ -255,8 +255,14 @@ def generate_partitionings_with_entropy(sentences):
         # Get semantic difference score
         semantic_score = calculate_semantic_difference(embeddings, partition_indices)
 
+        # Calculate segmentation penalty
+        n_segments = len(partition_indices)
+        n_sentences = len(sentences)  # Original document length
+        # Penalty is stronger for shorter documents
+        segmentation_penalty = -0.3 * (n_segments - 1) / np.sqrt(n_sentences)
+
         # Combine scores with equal weights
-        combined_score = -entropy_score + semantic_score
+        combined_score = -entropy_score + semantic_score + segmentation_penalty
 
         if combined_score > max_score:
             max_score = combined_score
