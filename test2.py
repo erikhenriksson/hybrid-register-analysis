@@ -152,7 +152,7 @@ def calculate_entropy(probs):
     # And penalize if other probabilities are also high
     other_strengths = sum(p for p in sorted_probs[1:])
 
-    print(max_strength - (other_strengths / len(sorted_probs[1:])))
+    return max_strength - (other_strengths / len(sorted_probs[1:]))
 
 
 def combine_short_sentences(
