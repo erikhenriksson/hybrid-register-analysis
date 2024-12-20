@@ -252,6 +252,7 @@ def generate_partitionings_with_entropy(sentences):
         entropies = [calculate_entropy(pred) for pred in partition_predictions]
         entropy_score = sum(entropies) / len(entropies)
 
+        """
         # Get semantic difference score
         semantic_score = calculate_semantic_difference(embeddings, partition_indices)
 
@@ -263,7 +264,8 @@ def generate_partitionings_with_entropy(sentences):
 
         # Combine scores with equal weights
         combined_score = -entropy_score + semantic_score + segmentation_penalty
-
+        """
+        combined_score = -entropy_score
         if combined_score > max_score:
             max_score = combined_score
             best_partition_indices = partition_indices
