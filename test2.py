@@ -310,7 +310,14 @@ def generate_partitionings_with_entropy(sentences):
         [round(float(y), 3) for y in predictions[idx]] for idx in best_partition_indices
     ]
 
-    return best_partition_text, best_partition_probs, round(max_score, 3)
+    best_partition_embeddings = embeddings[best_partition_indices]
+
+    return (
+        best_partition_text,
+        best_partition_probs,
+        best_partition_embeddings,
+        round(max_score, 3),
+    )
 
 
 def get_dominant_registers(probs, threshold=0.4):
@@ -336,7 +343,7 @@ def process_tsv_file(input_file_path, output_file_path):
         combined_sentences = combine_short_sentences(sentences)
 
         # Generate partitions and predictions
-        best_partition, partition_probs, max_score = (
+        best_partition, partition_probs, best_partition_embeddings, max_score = (
             generate_partitionings_with_entropy(combined_sentences)
         )
 
@@ -346,6 +353,7 @@ def process_tsv_file(input_file_path, output_file_path):
             "partition_probs": [
                 [float(prob) for prob in probs] for probs in partition_probs
             ],
+            "best_partition_embeddings": best_partition_embeddings.tolist(),
             "max_score": float(max_score),
         }
 
