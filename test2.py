@@ -257,6 +257,8 @@ def generate_partitionings_with_entropy(sentences):
 
     n = len(sentences)
 
+    print(n)
+
     def build_partitions(current_partition, covered_sentences):
         if covered_sentences == n:
             results.append(current_partition[:])
