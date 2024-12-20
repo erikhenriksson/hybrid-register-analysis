@@ -252,6 +252,8 @@ def generate_partitionings_with_entropy(sentences):
 
     # Get predictions and embeddings for all unique segments
     predictions = predict_batch(texts)
+    print(len(predictions))
+    exit()
     embeddings = get_embeddings_batch(texts)
 
     n = len(sentences)
