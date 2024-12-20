@@ -252,39 +252,27 @@ def generate_partitionings_with_entropy(sentences):
 
     # Get predictions and embeddings for all unique segments
     predictions = predict_batch(texts)
-
     embeddings = get_embeddings_batch(texts)
 
     n = len(sentences)
 
-    print(n)
-
-    def build_partitions(current_partition, covered_sentences):
-        if covered_sentences == n:
+    def build_partitions(current_partition, start_idx):
+        if start_idx == n:
             results.append(current_partition[:])
             return
 
-        # Try each subsequence that starts at our current position
         for idx, subsequence in enumerate(subsequences):
-            # Check if this subsequence starts at our current position
-            if subsequence[0] == sentences[covered_sentences]:
-                # Calculate how many sentences this subsequence would cover
-                subsequence_length = len(subsequence)
-                # Check if using this subsequence would stay within bounds
-                if covered_sentences + subsequence_length <= n:
+            if subsequence[0] == sentences[start_idx]:
+                if start_idx + len(subsequence) <= n:
                     current_partition.append(idx)
-                    build_partitions(
-                        current_partition, covered_sentences + subsequence_length
-                    )
+                    build_partitions(current_partition, start_idx + len(subsequence))
                     current_partition.pop()
 
     results = []
     build_partitions([], 0)
 
     print("Partitions: ", len(results))
-    print(results)
     exit()
-
     # Find partition with best combined score
     max_score = -float("inf")
     best_partition_indices = None
