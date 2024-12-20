@@ -123,7 +123,7 @@ def calculate_semantic_difference(embeddings, partition_indices):
 
     return sum(differences) / len(differences)
 
-
+"""
 def calculate_entropy(probs):
     """Calculate binary entropy for each probability in multilabel classification."""
 
@@ -137,6 +137,19 @@ def calculate_entropy(probs):
     probs = np.array(probs)
     # Calculate binary entropy for each probability
     return sum(binary_entropy(p) for p in probs)
+"""
+def calculate_entropy(probs):
+    """
+    Calculate how discrete the probabilities are by measuring how close they are to 1.
+    Return value closer to 1 means more discrete (clearer signal).
+    """
+    sorted_probs = sorted(probs, reverse=True)
+    # Check how close highest probability is to 1
+    max_strength = sorted_probs[0]
+    # And penalize if other probabilities are also high
+    other_strengths = sum(p for p in sorted_probs[1:])
+
+    print(max_strength - (other_strengths / len(sorted_probs[1:])))
 
 
 def combine_short_sentences(
@@ -265,7 +278,7 @@ def generate_partitionings_with_entropy(sentences):
         # Combine scores with equal weights
         combined_score = -entropy_score + semantic_score + segmentation_penalty
         """
-        combined_score = -entropy_score
+        combined_score = entropy_score
         if combined_score > max_score:
             max_score = combined_score
             best_partition_indices = partition_indices
