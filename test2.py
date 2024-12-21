@@ -168,16 +168,18 @@ def calculate_entropy(probs):
 
 
 def calculate_entropy(probs, threshold=0.4):
-    # Convert to binary decisions first
-    decisions = [1 if p >= threshold else 0 for p in probs]
+    scores = []
+    for p in probs:
+        if p >= threshold:
+            # For positives: how far above threshold
+            score = 1 + (p - threshold) / (1 - threshold)  # maps to [1, 2]
+        else:
+            # For negatives: how close to 0
+            score = p / threshold  # maps to [0, 1]
+        scores.append(score)
 
-    # Count how many clear positives and clear negatives we have
-    n_positives = sum(decisions)
-    n_negatives = len(decisions) - n_positives
-
-    # A distribution is more discrete if it has more definite assignments
-    # either positive or negative
-    return max(n_positives, n_negatives) / len(probs)
+    # Return average decisiveness
+    return sum(scores) / len(scores)
 
 
 def combine_short_sentences(
