@@ -155,19 +155,29 @@ def calculate_entropy(probs):
     return max_strength - (other_strengths / len(sorted_probs[1:]))
 """
 
-
+"""
 def calculate_entropy(probs):
-    """
-    Measures both:
-    1. How strong is the strongest signal (close to 1)
-    2. How weak are other signals (close to 0)
-    """
+
     sorted_probs = sorted(probs, reverse=True)
 
     dominant_strength = sorted_probs[0]  # Should be high
     other_signals = sum(sorted_probs[1:])  # Should be low
 
     return dominant_strength - other_signals
+"""
+
+
+def calculate_entropy(probs, threshold=0.4):
+    # Convert to binary decisions first
+    decisions = [1 if p >= threshold else 0 for p in probs]
+
+    # Count how many clear positives and clear negatives we have
+    n_positives = sum(decisions)
+    n_negatives = len(decisions) - n_positives
+
+    # A distribution is more discrete if it has more definite assignments
+    # either positive or negative
+    return max(n_positives, n_negatives) / len(probs)
 
 
 def combine_short_sentences(
