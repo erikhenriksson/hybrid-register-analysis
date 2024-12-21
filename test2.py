@@ -167,19 +167,26 @@ def calculate_entropy(probs):
 """
 
 
-def calculate_entropy(probs, threshold=0.4):
-    scores = []
-    for p in probs:
-        if p >= threshold:
-            # For positives: how far above threshold
-            score = 1 + (p - threshold) / (1 - threshold)  # maps to [1, 2]
-        else:
-            # For negatives: how close to 0
-            score = p / threshold  # maps to [0, 1]
-        scores.append(score)
+def centered_binary_entropy(p, threshold=0.4):
+    # Transform p to be centered around threshold
+    # Map [0, threshold] -> [0, 0.5]
+    # Map [threshold, 1] -> [0.5, 1]
+    if p <= threshold:
+        p_transformed = p * (0.5 / threshold)
+    else:
+        p_transformed = 0.5 + (p - threshold) * (0.5 / (1 - threshold))
 
-    # Return average decisiveness
-    return sum(scores) / len(scores)
+    # Now calculate binary entropy with transformed probability
+    if p_transformed == 0 or p_transformed == 1:
+        return 0
+    return -(
+        p_transformed * np.log2(p_transformed)
+        + (1 - p_transformed) * np.log2(1 - p_transformed)
+    )
+
+
+def calculate_entropy(probs, threshold=0.4):
+    return -np.mean([centered_binary_entropy(p, threshold) for p in probs])
 
 
 def combine_short_sentences(
