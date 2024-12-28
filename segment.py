@@ -19,18 +19,14 @@ DELTA = 1.0  # Weight for average variance
 
 def calculate_entropy(probabilities):
     """
-    Calculate the entropy for multilabel probabilities.
-    Probabilities shape: (num_samples, num_labels)
+    Calculate the entropy for a single set of probabilities (multilabel).
     """
-    probabilities = np.array(probabilities)
     eps = 1e-12  # To avoid log(0)
     probabilities = np.clip(
         probabilities, eps, 1 - eps
     )  # Clip probabilities to avoid numerical issues
-    entropy = -np.sum(
-        probabilities * np.log(probabilities), axis=1
-    )  # Compute per-label entropy
-    return entropy.mean()  # Average across all labels and samples
+    entropy = -np.sum(probabilities * np.log(probabilities), axis=-1)
+    return entropy.mean()
 
 
 def calculate_kl_divergence(prob_a, prob_b):
