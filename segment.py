@@ -147,7 +147,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 max_tokens = 512
-min_words = 50
+min_words = 20
 max_segments = 20
 model = model.to(device)
 model.eval()
