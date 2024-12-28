@@ -22,6 +22,7 @@ def calculate_entropy(probabilities):
     Calculate the entropy for multilabel probabilities.
     Probabilities shape: (num_samples, num_labels)
     """
+    probabilities = np.array(probabilities)
     eps = 1e-12  # To avoid log(0)
     probabilities = np.clip(
         probabilities, eps, 1 - eps
