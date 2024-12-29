@@ -12,9 +12,44 @@ import sys
 
 # Scoring parameters (weights for each component)
 ALPHA = 1.0  # Weight for average entropy
-BETA = 1.0  # Weight for average KL divergence
-GAMMA = 1.0  # Weight for mutual information
-DELTA = 1.0  # Weight for average variance
+BETA = 0.0  # Weight for average KL divergence
+GAMMA = 0.0  # Weight for mutual information
+DELTA = 0.0  # Weight for average variance
+
+labels_structure = {
+    "MT": [],
+    "LY": [],
+    "SP": ["it"],
+    "ID": [],
+    "NA": ["ne", "sr", "nb"],
+    "HI": ["re"],
+    "IN": ["en", "ra", "dtp", "fi", "lt"],
+    "OP": ["rv", "ob", "rs", "av"],
+    "IP": ["ds", "ed"],
+}
+
+labels_all = [k for k in labels_structure.keys()] + [
+    item for row in labels_structure.values() for item in row
+]
+
+
+def get_group_probabilities(prob_list):
+    group_probs = []
+
+    for label, children in labels_structure.items():
+        # Get index of parent label
+        parent_idx = labels_all.index(label)
+        parent_prob = prob_list[parent_idx]
+
+        if not children:  # Labels like MT, LY, ID
+            group_probs.append(parent_prob)
+        else:  # Labels like NA, IN, etc
+            # Get indices and probabilities of children
+            children_probs = [prob_list[labels_all.index(child)] for child in children]
+            # Take maximum probability in the group
+            group_probs.append(max(parent_prob, *children_probs))
+
+    return group_probs
 
 
 def calculate_entropy(probabilities):
@@ -62,6 +97,9 @@ def score_partition(partition_predictions, global_predictions):
     """
     num_blocks = len(partition_predictions)
 
+    # Group probs
+    partition_predictions = [get_group_probabilities(x) for x in partition_predictions]
+
     # Calculate metrics
     avg_entropy = np.mean([calculate_entropy(block) for block in partition_predictions])
     avg_kl_div = 0.0
@@ -93,22 +131,6 @@ def score_partition(partition_predictions, global_predictions):
     return score
 
 
-labels_structure = {
-    "MT": [],
-    "LY": [],
-    "SP": ["it"],
-    "ID": [],
-    "NA": ["ne", "sr", "nb"],
-    "HI": ["re"],
-    "IN": ["en", "ra", "dtp", "fi", "lt"],
-    "OP": ["rv", "ob", "rs", "av"],
-    "IP": ["ds", "ed"],
-}
-
-labels_all = [k for k in labels_structure.keys()] + [
-    item for row in labels_structure.values() for item in row
-]
-
 # Create the child to parent index mapping
 child_to_parent_idx = {}
 
@@ -127,18 +149,6 @@ labels_parents = {}
 for parent, children in labels_structure.items():
     for child in children:
         labels_parents[child] = parent
-
-REGISTER_NAMES = [
-    "MT",
-    "LY",
-    "SP",
-    "ID",
-    "NA",
-    "HI",
-    "IN",
-    "OP",
-    "IP",
-]
 
 # Load register classification model
 model_name = "TurkuNLP/web-register-classification-multilingual"
@@ -192,8 +202,8 @@ def predict_batch(texts, batch_size=32):
         # Move predictions back to CPU and convert to numpy
         batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
 
-        # Round to three decimals and take first 9 probabilities
-        batch_probs = [[round(prob, 3) for prob in probs[:9]] for probs in batch_probs]
+        # Round to three decimals
+        batch_probs = [[round(prob, 3) for prob in probs] for probs in batch_probs]
         all_probs.extend(batch_probs)
 
     return all_probs
@@ -379,7 +389,7 @@ def generate_partitionings_with_entropy(sentences):
 
 def get_dominant_registers(probs, threshold=0.4):
     """Get names of registers that pass the threshold."""
-    dominant = [REGISTER_NAMES[i] for i, p in enumerate(probs) if p >= threshold]
+    dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
     return dominant if dominant else ["None"]
 
 
