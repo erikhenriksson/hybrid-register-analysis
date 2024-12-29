@@ -180,25 +180,6 @@ def score_partition(partition_predictions, global_predictions, n, partition_text
     return score
 
 
-# Create the child to parent index mapping
-child_to_parent_idx = {}
-
-# Iterate through the structure
-for parent, children in labels_structure.items():
-    parent_idx = labels_all.index(parent)  # Get parent's index
-    for child in children:
-        child_idx = labels_all.index(child)  # Get child's index
-        child_to_parent_idx[child_idx] = parent_idx
-
-# Get main categories (keys from labels_structure)
-labels_main = list(labels_structure.keys())
-
-# Map children to parents
-labels_parents = {}
-for parent, children in labels_structure.items():
-    for child in children:
-        labels_parents[child] = parent
-
 # Load register classification model
 model_name = "TurkuNLP/web-register-classification-multilingual"
 tokenizer_name = "xlm-roberta-large"
