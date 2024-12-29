@@ -15,6 +15,8 @@ ALPHA = 1.0  # Weight for average entropy
 BETA = 0.0  # Weight for average KL divergence
 GAMMA = 0.0  # Weight for mutual information
 DELTA = 0.0  # Weight for average variance
+LAMBDA = 0.1  # Tunable parameter for over-segmentation
+MU = 0.1  # Tunable parameter for short segments
 
 labels_structure = {
     "MT": [],
@@ -91,16 +93,17 @@ def calculate_variance(probabilities):
     return np.var(probabilities, axis=0).mean()
 
 
-def score_partition(partition_predictions, global_predictions):
+def score_partition(partition_predictions, global_predictions, n, partition_texts):
     """
-    Compute the score for a given partition based on entropy, KL divergence, mutual information, and variance.
+    Compute the score for a given partition based on entropy, KL divergence, mutual information,
+    variance, and penalties for over-segmentation and short segments.
     """
     num_blocks = len(partition_predictions)
 
     # Group probs
     partition_predictions = [get_group_probabilities(x) for x in partition_predictions]
 
-    # Calculate metrics
+    # Calculate base metrics
     avg_entropy = np.mean([calculate_entropy(block) for block in partition_predictions])
     avg_kl_div = 0.0
 
@@ -121,12 +124,31 @@ def score_partition(partition_predictions, global_predictions):
         [calculate_variance(block) for block in partition_predictions]
     )
 
-    # Combine metrics into a score
+    # Calculate penalties
+
+    # 1. Over-segmentation penalty
+    # We need to pass the total number of sentences to this function
+    # Let's assume n is passed as an additional parameter
+    oversegmentation_penalty = num_blocks / n
+
+    # 2. Short segment penalty
+    # We need the original texts to calculate this
+    # Let's assume partition_texts is passed as an additional parameter
+
+    avg_length = np.mean([len(text.split()) for text in partition_texts])
+    short_penalties = [
+        max(0, 1 - len(text.split()) / (avg_length)) ** 2 for text in partition_texts
+    ]
+    short_segment_penalty = np.mean(short_penalties)
+
+    # Combine all components
     score = (
         ALPHA * -avg_entropy
         + BETA * avg_kl_div
         + GAMMA * mutual_info
         - DELTA * avg_variance
+        - LAMBDA * oversegmentation_penalty  # Add penalties
+        - MU * short_segment_penalty
     )
     return score
 
@@ -363,7 +385,14 @@ def generate_partitionings_with_entropy(sentences):
         global_predictions = np.mean(predictions, axis=0)
 
         # Compute the score for this partition
-        score = score_partition(partition_predictions, global_predictions)
+        score = score_partition(
+            partition_predictions,
+            global_predictions,
+            len(sentences),  # total number of sentences
+            [
+                " ".join(subsequences[idx]) for idx in partition_indices
+            ],  # texts for length calculation
+        )
 
         if score > max_score:
             max_score = score
