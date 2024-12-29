@@ -66,6 +66,23 @@ def calculate_entropy(probabilities):
     return entropy.mean()
 
 
+def calculate_multilabel_entropy(probabilities):
+    """
+    Calculate the entropy for multilabel predictions where each position
+    represents an independent binary decision.
+    """
+    eps = 1e-12  # To avoid log(0)
+    probabilities = np.clip(probabilities, eps, 1 - eps)
+
+    # Calculate binary entropy for each position
+    entropy = -(
+        probabilities * np.log(probabilities)
+        + (1 - probabilities) * np.log(1 - probabilities)
+    )
+
+    return entropy.mean()
+
+
 def calculate_kl_divergence(prob_a, prob_b):
     """
     Calculate KL divergence between two probability distributions (multilabel).
@@ -81,8 +98,8 @@ def calculate_mutual_information(global_probs, block_probs):
     """
     Calculate mutual information for a block given the global probabilities and the block probabilities.
     """
-    global_entropy = calculate_entropy(global_probs)
-    block_entropy = calculate_entropy(block_probs)
+    global_entropy = calculate_multilabel_entropy(global_probs)
+    block_entropy = calculate_multilabel_entropy(block_probs)
     return global_entropy - block_entropy
 
 
@@ -104,7 +121,7 @@ def score_partition(partition_predictions, global_predictions, n, partition_text
     partition_predictions = [get_group_probabilities(x) for x in partition_predictions]
 
     # Calculate base metrics
-    avg_entropy = np.mean([calculate_entropy(block) for block in partition_predictions])
+    avg_entropy = np.mean([calculate_multilabel_entropy(block) for block in partition_predictions])
     avg_kl_div = 0.0
 
     for i in range(num_blocks - 1):
