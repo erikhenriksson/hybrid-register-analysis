@@ -15,8 +15,8 @@ ALPHA = 1.0  # Weight for average entropy
 BETA = 0.0  # Weight for average KL divergence
 GAMMA = 0.0  # Weight for mutual information
 DELTA = 0.0  # Weight for average variance
-LAMBDA = 0.1  # Tunable parameter for over-segmentation
-MU = 0.1  # Tunable parameter for short segments
+LAMBDA = 0.05  # Tunable parameter for over-segmentation
+MU = 0.05  # Tunable parameter for short segments
 
 labels_structure = {
     "MT": [],
@@ -121,7 +121,9 @@ def score_partition(partition_predictions, global_predictions, n, partition_text
     partition_predictions = [get_group_probabilities(x) for x in partition_predictions]
 
     # Calculate base metrics
-    avg_entropy = np.mean([calculate_multilabel_entropy(block) for block in partition_predictions])
+    avg_entropy = np.mean(
+        [calculate_multilabel_entropy(block) for block in partition_predictions]
+    )
     avg_kl_div = 0.0
 
     for i in range(num_blocks - 1):
