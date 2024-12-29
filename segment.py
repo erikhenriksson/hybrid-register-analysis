@@ -234,6 +234,9 @@ def predict_batch(texts, batch_size=32):
 
         # Round to three decimals
         batch_probs = [[round(prob, 3) for prob in probs] for probs in batch_probs]
+
+        if MAIN_LABELS_ONLY:
+            batch_probs = [probs[:9] for probs in batch_probs]
         all_probs.extend(batch_probs)
 
     return all_probs
