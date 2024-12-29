@@ -249,7 +249,7 @@ def predict_batch(texts, batch_size=32):
 
     return all_probs
 
-
+"""
 def get_embeddings_batch(texts, batch_size=32):
     """Get embeddings for texts in batches using E5 model."""
     all_embeddings = []
@@ -285,7 +285,41 @@ def get_embeddings_batch(texts, batch_size=32):
         all_embeddings.append(embeddings.cpu())
 
     return torch.cat(all_embeddings, dim=0)
+"""
 
+def get_embeddings_batch(texts, batch_size=32):
+    """Get embeddings for texts in batches using RoBERTa model."""
+    all_embeddings = []
+
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i : i + batch_size]
+
+        # Tokenize batch using your existing RoBERTa tokenizer
+        inputs = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        ).to(device)
+
+        # Get embeddings
+        with torch.no_grad():
+            # We need to modify the forward pass to get hidden states
+            outputs = model(
+                **inputs,
+                output_hidden_states=True  # Request hidden states
+            )
+            
+            # Get the last hidden state
+            last_hidden_state = outputs.hidden_states[-1]
+            
+            # Extract the [CLS] token embeddings (first token of each sequence)
+            cls_embeddings = last_hidden_state[:, 0, :]
+
+        all_embeddings.append(cls_embeddings.cpu())
+
+    return torch.cat(all_embeddings, dim=0)
 
 def combine_short_sentences(
     sentences, initial_min_words=min_words, max_segments=max_segments
