@@ -9,6 +9,8 @@ import spacy
 from tqdm import tqdm
 import sys
 
+MAIN_LABELS_ONLY = True
+
 
 # Scoring parameters (weights for each component)
 ALPHA = 1.0  # Weight for average entropy
@@ -33,6 +35,9 @@ labels_structure = {
 labels_all = [k for k in labels_structure.keys()] + [
     item for row in labels_structure.values() for item in row
 ]
+
+if MAIN_LABELS_ONLY:
+    labels_all = list(labels_structure.keys())
 
 
 def get_group_probabilities(prob_list):
@@ -118,7 +123,10 @@ def score_partition(partition_predictions, global_predictions, n, partition_text
     num_blocks = len(partition_predictions)
 
     # Group probs
-    partition_predictions = [get_group_probabilities(x) for x in partition_predictions]
+    if not MAIN_LABELS_ONLY:
+        partition_predictions = [
+            get_group_probabilities(x) for x in partition_predictions
+        ]
 
     # Calculate base metrics
     avg_entropy = np.mean(
