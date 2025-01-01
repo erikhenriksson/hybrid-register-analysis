@@ -23,6 +23,13 @@ def calculate_multilabel_entropy(probabilities):
     return np.mean(np.sum(entropy, axis=-1))  # Sum over labels, then mean over batch
 
 
+def calculate_variance(probabilities):
+    """
+    Calculate the variance of probabilities within a block.
+    """
+    return np.var(probabilities, axis=0).mean()
+
+
 def score_partition(partition_predictions, n):
     num_blocks = len(partition_predictions)
 
@@ -31,12 +38,17 @@ def score_partition(partition_predictions, n):
         [calculate_multilabel_entropy(block) for block in partition_predictions]
     )
 
+    # Calculate variance
+    avg_variance = np.mean(
+        [calculate_variance(block) for block in partition_predictions]
+    )
+
     # Oversegmentation penalty
     oversegmentation_penalty = num_blocks / n
 
     # Combine all components
     score = (
-        -avg_entropy
+        -avg_variance
         - OVERSEGMENTATION_WEIGHT * oversegmentation_penalty  # Add penalties
     )
     return score
