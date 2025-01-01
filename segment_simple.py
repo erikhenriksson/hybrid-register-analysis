@@ -13,6 +13,7 @@ labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
 def calculate_multilabel_entropy(probabilities):
+    probabilities = np.array(probabilities)
     # Calculate binary entropy for each position
     entropy = -(
         probabilities * np.log(probabilities)
