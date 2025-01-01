@@ -8,7 +8,7 @@ import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 BATCH_SIZE = 64
-OVERSEGMENTATION_WEIGHT = 1
+OVERSEGMENTATION_WEIGHT = 0
 labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
