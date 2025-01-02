@@ -15,7 +15,6 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 max_tokens = 512
 batch_size = 64
-min_words = 15
 model = model.to(device)
 model.eval()
 
@@ -35,8 +34,6 @@ def predict_and_embed_batch(texts, batch_size=32):
 
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
-
-        # Tokenize batch
         inputs = tokenizer(
             batch_texts,
             return_tensors="pt",
@@ -45,64 +42,18 @@ def predict_and_embed_batch(texts, batch_size=32):
             max_length=512,
         ).to(device)
 
-        # Get predictions and embeddings
         with torch.no_grad():
             outputs = model(**inputs, output_hidden_states=True)
-
             batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
             last_hidden_state = outputs.hidden_states[-1]
             cls_embeddings = last_hidden_state[:, 0, :].cpu()
 
         batch_probs = [[round(prob, 3) for prob in probs[:9]] for probs in batch_probs]
-
         all_probs.extend(batch_probs)
         all_embeddings.append(cls_embeddings)
 
     all_embeddings = torch.cat(all_embeddings, dim=0)
     return all_probs, all_embeddings
-
-
-def combine_short_sentences(sentences, min_words=50):
-    """Combine short sentences to meet minimum word count requirement."""
-
-    def count_words(sentence):
-        return len(sentence.split())
-
-    while True:
-        result = []
-        buffer = ""
-
-        for sentence in sentences:
-            if count_words(sentence) >= min_words:
-                if buffer:
-                    result.append(buffer.strip())
-                    buffer = ""
-                result.append(sentence)
-            else:
-                buffer += (buffer and " ") + sentence
-                if count_words(buffer) >= min_words:
-                    result.append(buffer.strip())
-                    buffer = ""
-
-        if buffer:
-            result.append(buffer.strip())
-
-        # Final pass to ensure no short sentences
-        i = 0
-        while i < len(result):
-            if count_words(result[i]) < min_words:
-                if i < len(result) - 1:
-                    result[i + 1] = result[i] + " " + result[i + 1]
-                    result.pop(i)
-                elif i > 0:
-                    result[i - 1] += " " + result[i]
-                    result.pop(i)
-                else:
-                    break
-            else:
-                i += 1
-
-        return result
 
 
 def split_into_sentences(text):
@@ -117,94 +68,101 @@ def truncate_text_to_tokens(text):
     return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
 
 
-def find_best_cut_point(sentences, window_start, window_size):
-    """Find the best place to cut within the overlapping region of two windows."""
-    overlap_start = window_start + 1
-    overlap_end = window_start + window_size - 1
+def calculate_entropy(probabilities):
+    """Calculate entropy of predictions."""
+    probabilities = np.array(probabilities)
+    entropy = -(
+        probabilities * np.log(probabilities + 1e-10)
+        + (1 - probabilities) * np.log(1 - probabilities + 1e-10)
+    )
+    return np.mean(np.sum(entropy, axis=-1))
 
-    best_score = float("-inf")
-    best_cut = overlap_start + (overlap_end - overlap_start) // 2
 
-    for cut in range(overlap_start, overlap_end):
-        before_text = " ".join(sentences[cut - 2 : cut])
-        after_text = " ".join(sentences[cut : cut + 2])
+def score_split(left_sentences, right_sentences):
+    """
+    Score a potential split by comparing entropy of whole vs parts.
+    Returns score and predictions for both parts.
+    """
+    # Get predictions for whole and parts
+    whole_text = " ".join(left_sentences + right_sentences)
+    left_text = " ".join(left_sentences)
+    right_text = " ".join(right_sentences)
 
-        before_pred, _ = predict_and_embed_batch([before_text], batch_size=1)
-        after_pred, _ = predict_and_embed_batch([after_text], batch_size=1)
+    whole_pred, _ = predict_and_embed_batch([whole_text], batch_size=1)
+    left_pred, _ = predict_and_embed_batch([left_text], batch_size=1)
+    right_pred, _ = predict_and_embed_batch([right_text], batch_size=1)
 
-        before_registers = {j for j, p in enumerate(before_pred[0]) if p >= 0.4}
-        after_registers = {j for j, p in enumerate(after_pred[0]) if p >= 0.4}
+    # Calculate entropy improvement
+    whole_entropy = calculate_entropy(whole_pred)
+    split_entropy = (
+        len(left_sentences) * calculate_entropy(left_pred)
+        + len(right_sentences) * calculate_entropy(right_pred)
+    ) / len(whole_text)
 
-        score = len(before_registers.symmetric_difference(after_registers))
+    return whole_entropy - split_entropy, left_pred[0], right_pred[0]
+
+
+def recursive_split(sentences, min_sentences=2):
+    """
+    Recursively split text when it improves prediction discreteness.
+    Returns list of segments and their predictions.
+    """
+    if len(sentences) < min_sentences * 2:
+        text = " ".join(sentences)
+        pred, _ = predict_and_embed_batch([text], batch_size=1)
+        return [(sentences, pred[0])]
+
+    # Try all possible splits
+    best_score = -float("inf")
+    best_split = None
+    best_preds = None
+
+    for i in range(min_sentences, len(sentences) - min_sentences + 1):
+        left = sentences[:i]
+        right = sentences[i:]
+        score, left_pred, right_pred = score_split(left, right)
 
         if score > best_score:
             best_score = score
-            best_cut = cut
+            best_split = i
+            best_preds = (left_pred, right_pred)
 
-    return best_cut
-
-
-def segment_text(sentences, window_size=5):
-    """Segment text using sliding windows with intelligent cut point selection."""
-    if len(sentences) <= window_size:
-        return [sentences]
-
-    # Get predictions for overlapping windows
-    predictions = []
-    for i in range(len(sentences) - window_size + 1):
-        window = sentences[i : i + window_size]
-        text = " ".join(window)
+    # If no good split found, return as is
+    if best_score <= 0:
+        text = " ".join(sentences)
         pred, _ = predict_and_embed_batch([text], batch_size=1)
-        predictions.append(pred[0])
+        return [(sentences, pred[0])]
 
-    # Find segment boundaries
-    boundaries = [0]
+    # Recurse on both parts
+    left_segments = recursive_split(sentences[:best_split])
+    right_segments = recursive_split(sentences[best_split:])
 
-    for i in range(len(predictions) - 1):
-        current_pred = predictions[i]
-        next_pred = predictions[i + 1]
-
-        current_registers = {j for j, p in enumerate(current_pred) if p >= 0.4}
-        next_registers = {j for j, p in enumerate(next_pred) if p >= 0.4}
-
-        if len(current_registers.symmetric_difference(next_registers)) >= 1:
-            cut = find_best_cut_point(sentences, i, window_size)
-            if cut - boundaries[-1] >= window_size // 2:  # Minimum segment size
-                boundaries.append(cut)
-
-    boundaries.append(len(sentences))
-
-    # Create segments
-    segments = []
-    for i in range(len(boundaries) - 1):
-        segment = sentences[boundaries[i] : boundaries[i + 1]]
-        segments.append(segment)
-
-    return segments
+    return left_segments + right_segments
 
 
-def get_dominant_registers(probs, threshold=0.4):
+def get_dominant_registers(probs, threshold=0.3):
     """Get names of registers that pass the threshold."""
     dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
     return dominant if dominant else ["None"]
 
 
 def process_tsv_file(input_file_path, output_file_path):
-    """Process texts from TSV file using the simplified sliding window approach."""
+    """Process texts from TSV file using recursive splitting approach."""
     df = pd.read_csv(input_file_path, sep="\t", header=None)
 
     for idx, text in enumerate(df[1]):
         # Preprocess text
         truncated_text = truncate_text_to_tokens(text)
         sentences = split_into_sentences(truncated_text)
-        combined_sentences = combine_short_sentences(sentences)
 
-        # Get segments
-        segments = segment_text(combined_sentences)
+        # Get segments using recursive splitting
+        segments_with_preds = recursive_split(sentences)
+        segments = [seg for seg, _ in segments_with_preds]
+        segment_probs = [pred for _, pred in segments_with_preds]
 
-        # Get predictions for final segments
+        # Get embeddings for final segments
         segment_texts = [" ".join(segment) for segment in segments]
-        segment_probs, segment_embeddings = predict_and_embed_batch(
+        _, segment_embeddings = predict_and_embed_batch(
             segment_texts, batch_size=batch_size
         )
 
@@ -238,5 +196,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     input_file = sys.argv[1]
-    output_file = input_file.replace(".tsv", "_results_sliding.jsonl")
+    output_file = input_file.replace(".tsv", "_results_recursive.jsonl")
     process_tsv_file(input_file, output_file)
