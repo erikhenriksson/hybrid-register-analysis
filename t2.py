@@ -68,19 +68,9 @@ def truncate_text_to_tokens(text):
     return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
 
 
-def calculate_entropy(probabilities):
-    """Calculate entropy of predictions."""
-    probabilities = np.array(probabilities)
-    entropy = -(
-        probabilities * np.log(probabilities + 1e-10)
-        + (1 - probabilities) * np.log(1 - probabilities + 1e-10)
-    )
-    return np.mean(np.sum(entropy, axis=-1))
-
-
 def score_split(left_sentences, right_sentences):
     """
-    Score a potential split by comparing entropy of whole vs parts.
+    Score a potential split using Hamming distance between register predictions.
     Returns score and predictions for both parts.
     """
     # Get predictions for whole and parts
@@ -92,19 +82,29 @@ def score_split(left_sentences, right_sentences):
     left_pred, _ = predict_and_embed_batch([left_text], batch_size=1)
     right_pred, _ = predict_and_embed_batch([right_text], batch_size=1)
 
-    # Calculate entropy improvement
-    whole_entropy = calculate_entropy(whole_pred)
-    split_entropy = (
-        len(left_sentences) * calculate_entropy(left_pred)
-        + len(right_sentences) * calculate_entropy(right_pred)
-    ) / len(whole_text)
+    # Convert to binary predictions
+    left_binary = [1 if p >= 0.3 else 0 for p in left_pred[0]]
+    right_binary = [1 if p >= 0.3 else 0 for p in right_pred[0]]
+    whole_binary = [1 if p >= 0.3 else 0 for p in whole_pred[0]]
 
-    return whole_entropy - split_entropy, left_pred[0], right_pred[0]
+    # Calculate Hamming distances
+    left_right_diff = sum(l != r for l, r in zip(left_binary, right_binary)) / len(
+        left_binary
+    )
+
+    # Weight by the segment lengths
+    score = (
+        left_right_diff
+        * (len(left_sentences) + len(right_sentences))
+        / (2 * len(whole_binary))
+    )
+
+    return score, left_pred[0], right_pred[0]
 
 
 def recursive_split(sentences, min_sentences=4):
     """
-    Recursively split text when it improves prediction discreteness significantly.
+    Recursively split text when register predictions differ significantly.
     Returns list of segments and their predictions.
     """
     if len(sentences) < min_sentences * 2:
@@ -127,8 +127,9 @@ def recursive_split(sentences, min_sentences=4):
             best_split = i
             best_preds = (left_pred, right_pred)
 
-    # Only split if improvement is significant
-    if best_score <= 0.3:  # Increased threshold for splitting
+    # Only split if difference is significant
+    # Hamming distance threshold: 0.4 means at least 40% of registers need to differ
+    if best_score <= 0.4:
         text = " ".join(sentences)
         pred, _ = predict_and_embed_batch([text], batch_size=1)
         return [(sentences, pred[0])]
@@ -140,7 +141,7 @@ def recursive_split(sentences, min_sentences=4):
     return left_segments + right_segments
 
 
-def get_dominant_registers(probs, threshold=0.4):
+def get_dominant_registers(probs, threshold=0.3):
     """Get names of registers that pass the threshold."""
     dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
     return dominant if dominant else ["None"]
