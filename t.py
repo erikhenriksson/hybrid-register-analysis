@@ -240,7 +240,10 @@ def sliding_window_segmentation(sentences, window_size=3, min_segment_size=2):
         segment = sentences[start:end]
         segments.append(segment)
 
-    return segments
+    # Validate and merge segments based on full-text register predictions
+    final_segments = validate_and_merge_segments(segments)
+
+    return final_segments
 
 
 def get_dominant_registers(probs, threshold=0.4):
