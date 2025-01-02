@@ -1,114 +1,181 @@
 import json
 import sys
-from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
+import spacy
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+# Load register classification model
+model_name = "TurkuNLP/web-register-classification-multilingual"
+tokenizer_name = "xlm-roberta-large"
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+max_tokens = 512
+batch_size = 64
+min_words = 50
+max_segments = 20
+model = model.to(device)
+model.eval()
 
-def calculate_prediction_similarity(
-    pred1: List[float], pred2: List[float], threshold: float = 0.3
-) -> bool:
-    """
-    Calculate similarity between two register predictions.
-    Returns True if predictions are similar, False if significantly different.
-    """
+# Load spaCy
+nlp = spacy.load("xx_ent_wiki_sm")
+if "sentencizer" not in nlp.pipe_names:
+    nlp.add_pipe("sentencizer")
+
+# Register labels
+labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
+
+
+def predict_and_embed_batch(texts, batch_size=32):
+    """Predict probabilities and get embeddings for a batch of texts."""
+    all_probs = []
+    all_embeddings = []
+
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i : i + batch_size]
+
+        # Tokenize batch
+        inputs = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=512,
+        ).to(device)
+
+        # Get predictions and embeddings
+        with torch.no_grad():
+            outputs = model(**inputs, output_hidden_states=True)
+
+            # Get predictions
+            batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
+
+            # Get embeddings
+            last_hidden_state = outputs.hidden_states[-1]
+            cls_embeddings = last_hidden_state[:, 0, :].cpu()
+
+        # Round probabilities
+        batch_probs = [[round(prob, 3) for prob in probs[:9]] for probs in batch_probs]
+
+        all_probs.extend(batch_probs)
+        all_embeddings.append(cls_embeddings)
+
+    all_embeddings = torch.cat(all_embeddings, dim=0)
+    return all_probs, all_embeddings
+
+
+def combine_short_sentences(
+    sentences, initial_min_words=min_words, max_segments=max_segments
+):
+    """Combine short sentences to meet minimum word count requirement."""
+    min_words = initial_min_words
+
+    def count_words(sentence):
+        return len(sentence.split())
+
+    while True:
+        result = []
+        buffer = ""
+
+        for sentence in sentences:
+            if count_words(sentence) >= min_words:
+                if buffer:
+                    result.append(buffer.strip())
+                    buffer = ""
+                result.append(sentence)
+            else:
+                buffer += (buffer and " ") + sentence
+                if count_words(buffer) >= min_words:
+                    result.append(buffer.strip())
+                    buffer = ""
+
+        if buffer:
+            result.append(buffer.strip())
+
+        # Final pass to ensure no short sentences
+        i = 0
+        while i < len(result):
+            if count_words(result[i]) < min_words:
+                if i < len(result) - 1:
+                    result[i + 1] = result[i] + " " + result[i + 1]
+                    result.pop(i)
+                elif i > 0:
+                    result[i - 1] += " " + result[i]
+                    result.pop(i)
+                else:
+                    break
+            else:
+                i += 1
+
+        if len(result) <= max_segments:
+            return result
+        min_words += 1
+
+
+def split_into_sentences(text):
+    """Split text into sentences using spaCy."""
+    doc = nlp(text)
+    return [sent.text.strip() for sent in doc.sents]
+
+
+def truncate_text_to_tokens(text):
+    """Truncate text to fit within model's token limit."""
+    tokens = tokenizer(text, truncation=True, max_length=max_tokens)
+    return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
+
+
+def calculate_prediction_similarity(pred1, pred2, threshold=0.3):
+    """Calculate similarity between two register predictions."""
     differences = [abs(p1 - p2) for p1, p2 in zip(pred1, pred2)]
     return max(differences) < threshold
 
 
-def get_window_prediction(
-    sentences: List[str], start_idx: int, window_size: int, model, tokenizer, device
-) -> List[float]:
-    """
-    Get prediction for a specific window of sentences.
-    """
-    # Handle cases where window might extend beyond text boundaries
-    end_idx = min(start_idx + window_size, len(sentences))
-    window_text = " ".join(sentences[start_idx:end_idx])
-
-    # Tokenize and prepare input
-    inputs = tokenizer(
-        window_text, return_tensors="pt", truncation=True, padding=True, max_length=512
-    ).to(device)
-
-    # Get prediction
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()[0]
-
-    return [
-        round(float(p), 3) for p in probs[:9]
-    ]  # First 9 probabilities for registers
-
-
-def sliding_window_segmentation(
-    sentences: List[str], model, tokenizer, device, window_size: int = 3
-) -> Tuple[List[List[str]], List[List[float]]]:
-    """
-    Segment text using sliding window approach with precise change point detection.
-
-    Args:
-        sentences: List of sentences to segment
-        model: The loaded model for predictions
-        tokenizer: The tokenizer for the model
-        device: Device to run model on (cuda/cpu)
-        window_size: Size of sliding window
-
-    Returns:
-        Tuple containing:
-        - List of segments (each segment is a list of sentences)
-        - List of predictions for each segment
-    """
+def sliding_window_segmentation(sentences, window_size=3):
+    """Segment text using sliding window approach with precise boundary detection."""
     if len(sentences) < window_size:
-        text = " ".join(sentences)
-        pred = get_window_prediction(
-            sentences, 0, len(sentences), model, tokenizer, device
-        )
-        return [sentences], [pred]
+        return [sentences]
 
-    # Get predictions for all windows
-    windows_predictions = []
+    # Get predictions for all possible windows
+    windows = []
+    predictions = []
+
     for i in range(len(sentences) - window_size + 1):
-        pred = get_window_prediction(
-            sentences, i, window_size, model, tokenizer, device
-        )
-        windows_predictions.append(pred)
+        window = sentences[i : i + window_size]
+        text = " ".join(window)
+        pred, _ = predict_and_embed_batch([text], batch_size=1)
+        windows.append(window)
+        predictions.append(pred[0])
 
     # Find rough segment boundaries based on prediction changes
-    rough_boundaries = [0]  # Start with first sentence
-    for i in range(len(windows_predictions) - 1):
-        if not calculate_prediction_similarity(
-            windows_predictions[i], windows_predictions[i + 1]
-        ):
-            rough_boundaries.append(i + window_size // 2)
-    rough_boundaries.append(len(sentences))  # Add end boundary
+    segment_boundaries = [0]
+
+    for i in range(len(predictions) - 1):
+        if not calculate_prediction_similarity(predictions[i], predictions[i + 1]):
+            segment_boundaries.append(i + window_size // 2)
+
+    segment_boundaries.append(len(sentences))
 
     # Refine boundary positions using precise change point detection
-    refined_boundaries = [0]  # Always start with first sentence
+    refined_boundaries = [0]
 
-    for boundary in rough_boundaries[1:-1]:  # Skip first and last boundaries
-        # Look at 2 sentences before and after the rough boundary
+    for boundary in segment_boundaries[1:-1]:
         start_idx = max(0, boundary - 2)
         end_idx = min(len(sentences), boundary + 3)
 
-        # Generate all possible split points
         max_difference = 0
         best_split = boundary
 
         for split in range(start_idx + 1, end_idx):
-            # Create before and after windows
-            before_pred = get_window_prediction(
-                sentences, max(0, split - 2), 2, model, tokenizer, device
-            )
-            after_pred = get_window_prediction(
-                sentences, split, 2, model, tokenizer, device
-            )
+            before_text = " ".join(sentences[max(0, split - 2) : split])
+            after_text = " ".join(sentences[split : min(len(sentences), split + 2)])
 
-            # Calculate difference between predictions
-            diff = sum(abs(b - a) for b, a in zip(before_pred, after_pred))
+            before_pred, _ = predict_and_embed_batch([before_text], batch_size=1)
+            after_pred, _ = predict_and_embed_batch([after_text], batch_size=1)
+
+            diff = sum(abs(b - a) for b, a in zip(before_pred[0], after_pred[0]))
 
             if diff > max_difference:
                 max_difference = diff
@@ -116,77 +183,65 @@ def sliding_window_segmentation(
 
         refined_boundaries.append(best_split)
 
-    refined_boundaries.append(len(sentences))  # Add end boundary
+    refined_boundaries.append(len(sentences))
 
-    # Create segments and get their predictions
+    # Create segments based on refined boundaries
     segments = []
-    segment_predictions = []
-
     for i in range(len(refined_boundaries) - 1):
         start = refined_boundaries[i]
         end = refined_boundaries[i + 1]
         segment = sentences[start:end]
         segments.append(segment)
 
-        # Get prediction for entire segment
-        segment_pred = get_window_prediction(
-            sentences, start, end - start, model, tokenizer, device
-        )
-        segment_predictions.append(segment_pred)
-
-    return segments, segment_predictions
+    return segments
 
 
-def process_text_file(
-    input_file: str,
-    output_file: str,
-    model_name: str = "TurkuNLP/web-register-classification-multilingual",
-):
-    """
-    Process texts from a file using sliding window segmentation.
+def get_dominant_registers(probs, threshold=0.4):
+    """Get names of registers that pass the threshold."""
+    dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
+    return dominant if dominant else ["None"]
 
-    Args:
-        input_file: Path to input TSV file
-        output_file: Path to output JSONL file
-        model_name: Name of the model to use for register classification
-    """
-    # Setup model
-    tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    model.eval()
 
-    # Read input file
-    df = pd.read_csv(input_file, sep="\t", header=None)
+def process_tsv_file_sliding_window(input_file_path, output_file_path):
+    """Process texts from TSV file using sliding window approach."""
+    df = pd.read_csv(input_file_path, sep="\t", header=None)
 
-    # Process each text
     for idx, text in enumerate(df[1]):
-        # Tokenize text into sentences (assuming you have the split_into_sentences function)
-        sentences = split_into_sentences(text)
+        # Preprocess text
+        truncated_text = truncate_text_to_tokens(text)
+        sentences = split_into_sentences(truncated_text)
+        combined_sentences = combine_short_sentences(sentences)
 
-        # Perform segmentation
-        segments, predictions = sliding_window_segmentation(
-            sentences, model, tokenizer, device
+        # Get segments using sliding window
+        segments = sliding_window_segmentation(combined_sentences)
+
+        # Get predictions for final segments
+        segment_texts = [" ".join(segment) for segment in segments]
+        partition_probs, partition_embeddings = predict_and_embed_batch(
+            segment_texts, batch_size=batch_size
         )
 
         # Create result dictionary
         result = {
-            "segments": [" ".join(segment) for segment in segments],
-            "predictions": predictions,
-            "segment_boundaries": [len(segment) for segment in segments],
+            "segments": segments,
+            "segment_probs": [
+                [float(prob) for prob in probs] for probs in partition_probs
+            ],
+            "segment_embeddings": partition_embeddings.tolist(),
         }
 
-        # Write to output file
-        with open(output_file, "a", encoding="utf-8") as f:
+        # Write to JSONL file
+        with open(output_file_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(result, ensure_ascii=False) + "\n")
 
-        # Print progress
+        # Print progress and results
         print(f"\nProcessed text {idx + 1}/{len(df)}")
-        print("Segments found:", len(segments))
-        for segment, preds in zip(segments, predictions):
-            print(f"\nSegment text: {' '.join(segment)}")
-            print(f"Predictions: {preds}")
+        print("Predictions for each segment:")
+        for segment, probs in zip(segments, partition_probs):
+            dominant_registers = get_dominant_registers(probs)
+            print(f"Dominant registers: {', '.join(dominant_registers)}")
+            print(f"Text: {' '.join(segment)}")
+            print(f"Probabilities: {probs}\n")
         print("-" * 80)
 
 
@@ -196,6 +251,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     input_file = sys.argv[1]
-    output_file = input_file.replace(".tsv", "_segmented.jsonl")
-
-    process_text_file(input_file, output_file)
+    output_file = input_file.replace(".tsv", "_results_sliding.jsonl")
+    process_tsv_file_sliding_window(input_file, output_file)
