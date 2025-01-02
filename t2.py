@@ -27,7 +27,7 @@ if "sentencizer" not in nlp.pipe_names:
 labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
-def combine_short_sentences(sentences, min_words=5):
+def combine_short_sentences(sentences, min_words=15):
 
     def count_words(sentence):
         return len(sentence.split())
