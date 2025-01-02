@@ -82,10 +82,10 @@ def score_split(left_sentences, right_sentences):
     left_pred, _ = predict_and_embed_batch([left_text], batch_size=1)
     right_pred, _ = predict_and_embed_batch([right_text], batch_size=1)
 
-    # Convert to binary predictions
-    left_binary = [1 if p >= 0.3 else 0 for p in left_pred[0]]
-    right_binary = [1 if p >= 0.3 else 0 for p in right_pred[0]]
-    whole_binary = [1 if p >= 0.3 else 0 for p in whole_pred[0]]
+    # Convert to binary predictions using 0.4 threshold
+    left_binary = [1 if p >= 0.4 else 0 for p in left_pred[0]]
+    right_binary = [1 if p >= 0.4 else 0 for p in right_pred[0]]
+    whole_binary = [1 if p >= 0.4 else 0 for p in whole_pred[0]]
 
     # Calculate Hamming distances
     left_right_diff = sum(l != r for l, r in zip(left_binary, right_binary)) / len(
@@ -141,7 +141,7 @@ def recursive_split(sentences, min_sentences=4):
     return left_segments + right_segments
 
 
-def get_dominant_registers(probs, threshold=0.3):
+def get_dominant_registers(probs, threshold=0.4):
     """Get names of registers that pass the threshold."""
     dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
     return dominant if dominant else ["None"]
