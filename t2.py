@@ -140,7 +140,7 @@ def recursive_split(sentences, min_sentences=4):
     return left_segments + right_segments
 
 
-def get_dominant_registers(probs, threshold=0.3):
+def get_dominant_registers(probs, threshold=0.4):
     """Get names of registers that pass the threshold."""
     dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
     return dominant if dominant else ["None"]
