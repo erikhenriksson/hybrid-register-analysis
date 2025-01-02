@@ -102,9 +102,9 @@ def score_split(left_sentences, right_sentences):
     return whole_entropy - split_entropy, left_pred[0], right_pred[0]
 
 
-def recursive_split(sentences, min_sentences=2):
+def recursive_split(sentences, min_sentences=4):
     """
-    Recursively split text when it improves prediction discreteness.
+    Recursively split text when it improves prediction discreteness significantly.
     Returns list of segments and their predictions.
     """
     if len(sentences) < min_sentences * 2:
@@ -127,8 +127,8 @@ def recursive_split(sentences, min_sentences=2):
             best_split = i
             best_preds = (left_pred, right_pred)
 
-    # If no good split found, return as is
-    if best_score <= 0:
+    # Only split if improvement is significant
+    if best_score <= 0.3:  # Increased threshold for splitting
         text = " ".join(sentences)
         pred, _ = predict_and_embed_batch([text], batch_size=1)
         return [(sentences, pred[0])]
