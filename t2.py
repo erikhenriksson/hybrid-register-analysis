@@ -70,69 +70,58 @@ def truncate_text_to_tokens(text):
 
 def score_split(left_sentences, right_sentences):
     """
-    Score a split based on register differences and prediction confidence.
-    More conservative scoring to avoid over-splitting.
+    Check if register predictions differ between two segments.
+    Returns whether registers differ and predictions for both parts.
     """
+    # Get predictions for parts
     left_text = " ".join(left_sentences)
     right_text = " ".join(right_sentences)
 
     left_pred, _ = predict_and_embed_batch([left_text], batch_size=1)
     right_pred, _ = predict_and_embed_batch([right_text], batch_size=1)
 
-    # Get binary predictions using 0.4 threshold
+    # Convert to binary predictions using 0.4 threshold
     left_binary = [1 if p >= 0.4 else 0 for p in left_pred[0]]
     right_binary = [1 if p >= 0.4 else 0 for p in right_pred[0]]
 
-    # Only count as difference if probabilities differ significantly
-    num_differences = sum(
-        (l != r and abs(left_pred[0][i] - right_pred[0][i]) > 0.2)
-        for i, (l, r) in enumerate(zip(left_binary, right_binary))
-    )
+    # Check if any register differs
+    differs = any(l != r for l, r in zip(left_binary, right_binary))
 
-    # Calculate confidence scores
-    left_confidence = sum(max(p, 1 - p) for p in left_pred[0]) / len(left_pred[0])
-    right_confidence = sum(max(p, 1 - p) for p in right_pred[0]) / len(right_pred[0])
-    avg_confidence = (left_confidence + right_confidence) / 2
-
-    differs = num_differences > 0
-    if differs:
-        # Require both good differences and good confidence
-        score = num_differences * avg_confidence
-    else:
-        score = 0
-
-    return score, differs, (left_pred[0], right_pred[0])
+    return differs, left_pred[0], right_pred[0]
 
 
 def recursive_split(sentences, min_sentences=4):
     """
-    Recursively split text, choosing the best split based on register differences
-    and prediction confidence.
+    Recursively split text when register predictions differ significantly.
+    Returns list of segments and their predictions.
     """
     if len(sentences) < min_sentences * 2:
         text = " ".join(sentences)
         pred, _ = predict_and_embed_batch([text], batch_size=1)
         return [(sentences, pred[0])]
 
-    # Try all possible splits and keep track of the best one
-    best_score = 0
+    # Try all possible splits
+    best_score = -float("inf")
     best_split = None
     best_preds = None
 
     for i in range(min_sentences, len(sentences) - min_sentences + 1):
-        score, differs, preds = score_split(sentences[:i], sentences[i:])
-        if differs and score > best_score:
+        left = sentences[:i]
+        right = sentences[i:]
+        score, left_pred, right_pred = score_split(left, right)
+
+        if score > best_score:
             best_score = score
             best_split = i
-            best_preds = preds
+            best_preds = (left_pred, right_pred)
 
-    # If no good split found, return as is
-    if best_split is None:
+    # Only split if registers differ
+    if not best_score:  # If no registers differ
         text = " ".join(sentences)
         pred, _ = predict_and_embed_batch([text], batch_size=1)
         return [(sentences, pred[0])]
 
-    # Recurse on both parts using the best split
+    # Recurse on both parts
     left_segments = recursive_split(sentences[:best_split])
     right_segments = recursive_split(sentences[best_split:])
 
