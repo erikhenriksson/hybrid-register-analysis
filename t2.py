@@ -27,51 +27,48 @@ if "sentencizer" not in nlp.pipe_names:
 labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
-def combine_short_sentences(sentences, initial_min_words=5, max_segments=100000):
-    min_words = initial_min_words
+def combine_short_sentences(sentences, min_words=5):
 
     def count_words(sentence):
         return len(sentence.split())
 
-    while 1:
-        result = []
-        buffer = ""
+    result = []
+    buffer = ""
 
-        for i, sentence in enumerate(sentences):
-            if count_words(sentence) >= min_words:
-                if buffer:
-                    result.append(buffer.strip())
-                    buffer = ""
-                result.append(sentence)
-            else:
-                buffer += (buffer and " ") + sentence
+    for i, sentence in enumerate(sentences):
+        if count_words(sentence) >= min_words:
+            if buffer:
+                result.append(buffer.strip())
+                buffer = ""
+            result.append(sentence)
+        else:
+            buffer += (buffer and " ") + sentence
 
-                # If the buffer reaches min_words, finalize it
-                if count_words(buffer) >= min_words:
-                    result.append(buffer.strip())
-                    buffer = ""
+            # If the buffer reaches min_words, finalize it
+            if count_words(buffer) >= min_words:
+                result.append(buffer.strip())
+                buffer = ""
 
-        # Handle leftover buffer
-        if buffer:
-            result.append(buffer.strip())
+    # Handle leftover buffer
+    if buffer:
+        result.append(buffer.strip())
 
-        # Final pass: Ensure no sentences in the result are below min_words
-        i = 0
-        while i < len(result):
-            if count_words(result[i]) < min_words:
-                if i < len(result) - 1:  # Merge with the next sentence
-                    result[i + 1] = result[i] + " " + result[i + 1]
-                    result.pop(i)
-                elif i > 0:  # Merge with the previous sentence if it's the last one
-                    result[i - 1] += " " + result[i]
-                    result.pop(i)
-                else:  # Single short sentence case
-                    break
-            else:
-                i += 1
-        if len(result) <= max_segments:
-            return result
-        min_words += 1
+    # Final pass: Ensure no sentences in the result are below min_words
+    i = 0
+    while i < len(result):
+        if count_words(result[i]) < min_words:
+            if i < len(result) - 1:  # Merge with the next sentence
+                result[i + 1] = result[i] + " " + result[i + 1]
+                result.pop(i)
+            elif i > 0:  # Merge with the previous sentence if it's the last one
+                result[i - 1] += " " + result[i]
+                result.pop(i)
+            else:  # Single short sentence case
+                break
+        else:
+            i += 1
+
+    return result
 
 
 def predict_and_embed_batch(texts, batch_size=32):
