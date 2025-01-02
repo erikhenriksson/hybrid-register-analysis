@@ -217,7 +217,7 @@ def sliding_window_segmentation(sentences, window_size=3, min_segment_size=3):
         # Only keep boundary if there's a significant enough difference
         if max_difference > 0.8:  # Increased threshold for significance
         
-        refined_boundaries.append(best_split)
+            refined_boundaries.append(best_split)
     
     refined_boundaries.append(len(sentences))
     
