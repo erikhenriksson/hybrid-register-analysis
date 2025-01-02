@@ -71,7 +71,7 @@ def truncate_text_to_tokens(text):
 def score_split(left_sentences, right_sentences):
     """
     Score a split based on register differences and prediction confidence.
-    Returns (score, differs, predictions) where score indicates split quality.
+    More conservative scoring to avoid over-splitting.
     """
     left_text = " ".join(left_sentences)
     right_text = " ".join(right_sentences)
@@ -83,18 +83,21 @@ def score_split(left_sentences, right_sentences):
     left_binary = [1 if p >= 0.4 else 0 for p in left_pred[0]]
     right_binary = [1 if p >= 0.4 else 0 for p in right_pred[0]]
 
-    # Count number of differing registers
-    num_differences = sum(l != r for l, r in zip(left_binary, right_binary))
+    # Only count as difference if probabilities differ significantly
+    num_differences = sum(
+        (l != r and abs(left_pred[0][i] - right_pred[0][i]) > 0.2)
+        for i, (l, r) in enumerate(zip(left_binary, right_binary))
+    )
 
-    # Calculate confidence scores (how close predictions are to 0 or 1)
+    # Calculate confidence scores
     left_confidence = sum(max(p, 1 - p) for p in left_pred[0]) / len(left_pred[0])
     right_confidence = sum(max(p, 1 - p) for p in right_pred[0]) / len(right_pred[0])
+    avg_confidence = (left_confidence + right_confidence) / 2
 
-    # Combined score: number of differences + average confidence
-    # Weight differences more heavily (multiply by 2)
     differs = num_differences > 0
     if differs:
-        score = (2 * num_differences) + (left_confidence + right_confidence) / 2
+        # Require both good differences and good confidence
+        score = num_differences * avg_confidence
     else:
         score = 0
 
