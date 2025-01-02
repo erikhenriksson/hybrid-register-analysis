@@ -27,6 +27,53 @@ if "sentencizer" not in nlp.pipe_names:
 labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
+def combine_short_sentences(sentences, initial_min_words=5, max_segments=100000):
+    min_words = initial_min_words
+
+    def count_words(sentence):
+        return len(sentence.split())
+
+    while 1:
+        result = []
+        buffer = ""
+
+        for i, sentence in enumerate(sentences):
+            if count_words(sentence) >= min_words:
+                if buffer:
+                    result.append(buffer.strip())
+                    buffer = ""
+                result.append(sentence)
+            else:
+                buffer += (buffer and " ") + sentence
+
+                # If the buffer reaches min_words, finalize it
+                if count_words(buffer) >= min_words:
+                    result.append(buffer.strip())
+                    buffer = ""
+
+        # Handle leftover buffer
+        if buffer:
+            result.append(buffer.strip())
+
+        # Final pass: Ensure no sentences in the result are below min_words
+        i = 0
+        while i < len(result):
+            if count_words(result[i]) < min_words:
+                if i < len(result) - 1:  # Merge with the next sentence
+                    result[i + 1] = result[i] + " " + result[i + 1]
+                    result.pop(i)
+                elif i > 0:  # Merge with the previous sentence if it's the last one
+                    result[i - 1] += " " + result[i]
+                    result.pop(i)
+                else:  # Single short sentence case
+                    break
+            else:
+                i += 1
+        if len(result) <= max_segments:
+            return result
+        min_words += 1
+
+
 def predict_and_embed_batch(texts, batch_size=32):
     """Predict probabilities and get embeddings for a batch of texts."""
     all_probs = []
@@ -90,7 +137,7 @@ def score_split(left_sentences, right_sentences):
     return differs, left_pred[0], right_pred[0]
 
 
-def recursive_split(sentences, min_sentences=4):
+def recursive_split(sentences, min_sentences=5):
     """
     Recursively split text when register predictions differ significantly.
     Returns list of segments and their predictions.
@@ -142,6 +189,8 @@ def process_tsv_file(input_file_path, output_file_path):
         # Preprocess text
         truncated_text = truncate_text_to_tokens(text)
         sentences = split_into_sentences(truncated_text)
+
+        sentences = combine_short_sentences(sentences)
 
         # Get segments using recursive splitting
         segments_with_preds = recursive_split(sentences)
