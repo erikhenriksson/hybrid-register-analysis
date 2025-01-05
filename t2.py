@@ -217,6 +217,9 @@ def process_tsv_file(input_file_path, output_file_path):
         result = {
             "document_labels": document_labels,
             "segments": segments,
+            "segment_labels": [
+                get_dominant_registers(probs) for probs in segment_probs
+            ],
             "segment_probs": [
                 [round(float(prob), 3) for prob in probs] for probs in segment_probs
             ],
