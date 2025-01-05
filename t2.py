@@ -1,7 +1,6 @@
 import json
 import sys
 
-import numpy as np
 import pandas as pd
 import spacy
 import torch
@@ -13,10 +12,15 @@ tokenizer_name = "xlm-roberta-large"
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-max_tokens = 512
-batch_size = 64
 model = model.to(device)
 model.eval()
+
+# Parameters
+max_tokens = 512
+batch_size = 1
+min_words_per_segment = 50
+min_words_per_sentence = 15
+threshold = 0.4
 
 # Load spaCy
 nlp = spacy.load("xx_ent_wiki_sm")
@@ -27,51 +31,7 @@ if "sentencizer" not in nlp.pipe_names:
 labels_all = ["MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"]
 
 
-def combine_short_sentences(sentences, min_words=15):
-
-    def count_words(sentence):
-        return len(sentence.split())
-
-    result = []
-    buffer = ""
-
-    for i, sentence in enumerate(sentences):
-        if count_words(sentence) >= min_words:
-            if buffer:
-                result.append(buffer.strip())
-                buffer = ""
-            result.append(sentence)
-        else:
-            buffer += (buffer and " ") + sentence
-
-            # If the buffer reaches min_words, finalize it
-            if count_words(buffer) >= min_words:
-                result.append(buffer.strip())
-                buffer = ""
-
-    # Handle leftover buffer
-    if buffer:
-        result.append(buffer.strip())
-
-    # Final pass: Ensure no sentences in the result are below min_words
-    i = 0
-    while i < len(result):
-        if count_words(result[i]) < min_words:
-            if i < len(result) - 1:  # Merge with the next sentence
-                result[i + 1] = result[i] + " " + result[i + 1]
-                result.pop(i)
-            elif i > 0:  # Merge with the previous sentence if it's the last one
-                result[i - 1] += " " + result[i]
-                result.pop(i)
-            else:  # Single short sentence case
-                break
-        else:
-            i += 1
-
-    return result
-
-
-def predict_and_embed_batch(texts, batch_size=32):
+def predict_and_embed_batch(texts, batch_size=batch_size):
     """Predict probabilities and get embeddings for a batch of texts."""
     all_probs = []
     all_embeddings = []
@@ -112,74 +72,132 @@ def truncate_text_to_tokens(text):
     return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
 
 
-def score_split(left_sentences, right_sentences):
+def get_word_count(text):
+    """Count words in a text segment."""
+    return len(text.split())
+
+
+def get_strong_registers(probs):
+    """Get indices of registers that pass the threshold."""
+    return {i for i, p in enumerate(probs) if p >= threshold}
+
+
+def recursive_segment(sentences, parent_registers=None):
     """
-    Check if register predictions differ between two segments.
-    Returns whether registers differ and predictions for both parts.
+    Recursively segment text based on register predictions.
+
+    Args:
+        sentences: List of sentences
+        parent_registers: Set of register indices from parent segment
+
+    Returns:
+        segments: List of segments (each segment is a list of sentences)
+        segment_probs: List of probability vectors for each segment
+        segment_embeddings: Tensor of embeddings for each segment
     """
-    # Get predictions for parts
-    left_text = " ".join(left_sentences)
-    right_text = " ".join(right_sentences)
+    # If we don't have parent registers (first call), analyze full text
+    text = " ".join(sentences)
+    if parent_registers is None:
+        probs, embeddings = predict_and_embed_batch([text])
+        parent_registers = get_strong_registers(probs[0])
 
-    left_pred, _ = predict_and_embed_batch([left_text], batch_size=1)
-    right_pred, _ = predict_and_embed_batch([right_text], batch_size=1)
+        # If text is too short or no strong registers, return as is
+        if get_word_count(text) < min_words_per_segment or not parent_registers:
+            return [sentences], probs, embeddings
 
-    # Convert to binary predictions using 0.4 threshold
-    left_binary = [1 if p >= 0.4 else 0 for p in left_pred[0]]
-    right_binary = [1 if p >= 0.4 else 0 for p in right_pred[0]]
-
-    # Check if any register differs
-    differs = any(l != r for l, r in zip(left_binary, right_binary))
-
-    return differs, left_pred[0], right_pred[0]
-
-
-def recursive_split(sentences, min_sentences=5):
-    """
-    Recursively split text when register predictions differ significantly.
-    Returns list of segments and their predictions.
-    """
-    if len(sentences) < min_sentences * 2:
-        text = " ".join(sentences)
-        pred, _ = predict_and_embed_batch([text], batch_size=1)
-        return [(sentences, pred[0])]
-
-    # Try all possible splits
-    best_score = -float("inf")
     best_split = None
-    best_preds = None
+    best_split_score = -1
+    best_probs_left = None
+    best_probs_right = None
+    best_emb_left = None
+    best_emb_right = None
 
-    for i in range(min_sentences, len(sentences) - min_sentences + 1):
-        left = sentences[:i]
-        right = sentences[i:]
-        score, left_pred, right_pred = score_split(left, right)
+    # Try all possible split points
+    for i in range(1, len(sentences)):
+        left_text = " ".join(sentences[:i])
+        right_text = " ".join(sentences[i:])
 
-        if score > best_score:
-            best_score = score
+        # Check minimum length requirement
+        if (
+            get_word_count(left_text) < min_words_per_segment
+            or get_word_count(right_text) < min_words_per_segment
+        ):
+            continue
+
+        # Get predictions for both segments
+        split_texts = [left_text, right_text]
+        probs, embeddings = predict_and_embed_batch(split_texts)
+        left_registers = get_strong_registers(probs[0])
+        right_registers = get_strong_registers(probs[1])
+
+        # Skip if either segment has no strong registers
+        if not left_registers or not right_registers:
+            continue
+
+        # Check if at least one segment maintains continuity with parent
+        if not (
+            left_registers & parent_registers or right_registers & parent_registers
+        ):
+            continue
+
+        # Check if segments have different register patterns
+        if left_registers == right_registers:
+            continue
+
+        # Calculate split score (number of different strong registers)
+        split_score = len(left_registers ^ right_registers)
+
+        if split_score > best_split_score:
+            best_split_score = split_score
             best_split = i
-            best_preds = (left_pred, right_pred)
+            best_probs_left = probs[0]
+            best_probs_right = probs[1]
+            best_emb_left = embeddings[0].unsqueeze(0)
+            best_emb_right = embeddings[1].unsqueeze(0)
 
-    # Only split if registers differ
-    if not best_score:  # If no registers differ
-        text = " ".join(sentences)
-        pred, _ = predict_and_embed_batch([text], batch_size=1)
-        return [(sentences, pred[0])]
+    # If no valid split found, return current segment with its predictions
+    if best_split is None:
+        probs, embeddings = predict_and_embed_batch([text])
+        return [sentences], probs, embeddings
 
-    # Recurse on both parts
-    left_segments = recursive_split(sentences[:best_split])
-    right_segments = recursive_split(sentences[best_split:])
+    # Recursively process both segments
+    left_sentences = sentences[:best_split]
+    right_sentences = sentences[best_split:]
 
-    return left_segments + right_segments
+    # Get registers for recursive calls
+    left_registers = get_strong_registers(best_probs_left)
+    right_registers = get_strong_registers(best_probs_right)
 
+    # Make recursive calls with corresponding registers
+    left_segments, left_probs, left_embeddings = recursive_segment(
+        left_sentences, left_registers
+    )
+    right_segments, right_probs, right_embeddings = recursive_segment(
+        right_sentences, right_registers
+    )
 
-def get_dominant_registers(probs, threshold=0.4):
-    """Get names of registers that pass the threshold."""
-    dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
-    return dominant if dominant else ["None"]
+    # If no further splits occurred, use the predictions from this level
+    if len(left_segments) == 1 and len(right_segments) == 1:
+        segments = [left_sentences, right_sentences]
+        segment_probs = [[p for p in best_probs_left], [p for p in best_probs_right]]
+        segment_embeddings = torch.cat([best_emb_left, best_emb_right], dim=0)
+    else:
+        # Further splits occurred, concatenate all results in order
+        segments = left_segments + right_segments
+        segment_probs = left_probs + right_probs
+        segment_embeddings = torch.cat([left_embeddings, right_embeddings], dim=0)
+
+    return segments, segment_probs, segment_embeddings
 
 
 def process_tsv_file(input_file_path, output_file_path):
     """Process texts from TSV file using recursive splitting approach."""
+
+    def get_dominant_registers(probs):
+        """Get names of registers that pass the threshold."""
+        dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
+        return dominant or ["None"]
+
     df = pd.read_csv(input_file_path, sep="\t", header=None)
 
     for idx, text in enumerate(df[1]):
@@ -187,24 +205,14 @@ def process_tsv_file(input_file_path, output_file_path):
         truncated_text = truncate_text_to_tokens(text)
         sentences = split_into_sentences(truncated_text)
 
-        sentences = combine_short_sentences(sentences)
-
-        # Get segments using recursive splitting
-        segments_with_preds = recursive_split(sentences)
-        segments = [seg for seg, _ in segments_with_preds]
-        segment_probs = [pred for _, pred in segments_with_preds]
-
-        # Get embeddings for final segments
-        segment_texts = [" ".join(segment) for segment in segments]
-        _, segment_embeddings = predict_and_embed_batch(
-            segment_texts, batch_size=batch_size
-        )
+        # Recursively split text
+        segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
         # Create result dictionary
         result = {
             "segments": segments,
             "segment_probs": [
-                [float(prob) for prob in probs] for probs in segment_probs
+                [round(float(prob), 3) for prob in probs] for probs in segment_probs
             ],
             "segment_embeddings": segment_embeddings.tolist(),
         }
