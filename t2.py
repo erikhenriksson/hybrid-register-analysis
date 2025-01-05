@@ -205,11 +205,17 @@ def process_tsv_file(input_file_path, output_file_path):
         truncated_text = truncate_text_to_tokens(text)
         sentences = split_into_sentences(truncated_text)
 
+        # Get document level predictions first
+        full_text = " ".join(sentences)
+        doc_probs, _ = predict_and_embed_batch([full_text])
+        document_labels = get_dominant_registers(doc_probs[0])
+
         # Recursively split text
         segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
         # Create result dictionary
         result = {
+            "document_labels": document_labels,
             "segments": segments,
             "segment_probs": [
                 [round(float(prob), 3) for prob in probs] for probs in segment_probs
@@ -223,7 +229,8 @@ def process_tsv_file(input_file_path, output_file_path):
 
         # Print progress and results
         print(f"\nProcessed text {idx + 1}/{len(df)}")
-        print("Predictions for each segment:")
+        print(f"Document-level labels: {document_labels}")
+        print("\nPredictions for each segment:")
         for segment, probs in zip(segments, segment_probs):
             dominant_registers = get_dominant_registers(probs)
             print(f"Dominant registers: {', '.join(dominant_registers)}")
