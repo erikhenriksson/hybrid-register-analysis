@@ -207,7 +207,7 @@ def process_tsv_file(input_file_path, output_file_path):
 
         # Get document level predictions first
         full_text = " ".join(sentences)
-        doc_probs, _ = predict_and_embed_batch([full_text])
+        doc_probs, doc_embeddings = predict_and_embed_batch([full_text])
         document_labels = get_dominant_registers(doc_probs[0])
 
         # Recursively split text
@@ -216,6 +216,7 @@ def process_tsv_file(input_file_path, output_file_path):
         # Create result dictionary
         result = {
             "document_labels": document_labels,
+            "document_embeddings": doc_embeddings.tolist(),
             "segments": segments,
             "segment_labels": [
                 get_dominant_registers(probs) for probs in segment_probs
