@@ -9,7 +9,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 # Parameters
 max_tokens = 512
 batch_size = 1
-min_words_per_segment = 100
+min_chars_per_segment = 500
 threshold = 0.4
 
 # Load register classification model
@@ -131,7 +131,7 @@ def recursive_segment(sentences, parent_registers=None):
         parent_registers = get_strong_registers(probs[0])
 
         # If text is too short or no strong registers, return as is
-        if get_word_count(text) < min_words_per_segment or not parent_registers:
+        if len(text) < min_chars_per_segment or not parent_registers:
             return [sentences], probs, embeddings
 
     best_split = None
@@ -148,8 +148,8 @@ def recursive_segment(sentences, parent_registers=None):
 
         # Check minimum length requirement
         if (
-            get_word_count(left_text) < min_words_per_segment
-            or get_word_count(right_text) < min_words_per_segment
+            len(left_text) < min_chars_per_segment
+            or len(right_text) < min_chars_per_segment
         ):
             continue
 
