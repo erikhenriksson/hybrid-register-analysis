@@ -224,8 +224,16 @@ def process_tsv_file(input_file_path, output_file_path):
         doc_probs, doc_embeddings = predict_and_embed_batch([full_text])
         document_labels = index_to_name(get_strong_registers(doc_probs[0]))
 
-        # Recursively split text
-        segments, segment_probs, segment_embeddings = recursive_segment(sentences)
+        # Recursively split text - now handling 5 return values
+        segments, segment_probs, segment_embeddings, found_labels, valid = (
+            recursive_segment(sentences)
+        )
+
+        # If not valid, use original unsplit text
+        if not valid:
+            segments = [sentences]
+            segment_probs = [doc_probs[0]]
+            segment_embeddings = doc_embeddings
 
         # Create result dictionary
         result = {
