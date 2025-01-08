@@ -62,7 +62,8 @@ def zero_parents(binary_list):
 
 # Index to name mapping
 def index_to_name(indices):
-    return [labels_list[i] for i in indices]
+    # Iterate the label list and grab if indices has it
+    return [labels_list[i] for i in range(len(labels_list)) if i in indices]
 
 
 # Predict probabilities and get embeddings for a batch of texts
@@ -113,8 +114,8 @@ def get_strong_registers(probs):
     binary_registers = [int(p >= threshold) for p in probs]
 
     # Zero out parents
-    
-    #binary_registers = zero_parents(binary_registers)
+
+    # binary_registers = zero_parents(binary_registers)
     indices = [i for i, p in enumerate(binary_registers) if p]
     return set(indices)
 
