@@ -215,7 +215,10 @@ def process_tsv_file(input_file_path, output_file_path):
 
     df = pd.read_csv(input_file_path, sep="\t", header=None)
 
-    for idx, text in enumerate(df[1]):
+    for idx, row in df.iterrows():
+        true_labels = row[0]  # Get true labels from first column
+        text = row[1]  # Get text from second column
+
         # Preprocess text
         truncated_text = truncate_text_to_tokens(text)
         sentences = split_into_sentences(truncated_text)
@@ -231,6 +234,7 @@ def process_tsv_file(input_file_path, output_file_path):
         # Create result dictionary
         result = {
             "document_labels": document_labels,
+            "true_labels": true_labels,
             "document_embeddings": doc_embeddings.tolist(),
             "segments": segments,
             "segment_labels": [
@@ -248,7 +252,8 @@ def process_tsv_file(input_file_path, output_file_path):
 
         # Print progress and results
         print(f"\nProcessed text {idx + 1}/{len(df)}")
-        print(f"Document-level labels: {document_labels}")
+        print(f"True labels: {true_labels}")
+        print(f"Document-level predicted labels: {document_labels}")
         print("\nPredictions for each segment:")
 
         for segment, probs, segment_labels in zip(
