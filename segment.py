@@ -120,17 +120,18 @@ def get_strong_registers(probs):
     return set(indices)
 
 
-def recursive_segment(sentences, parent_registers=None, required_labels=None):
+def build_segmentation_trees(sentences):
+    """Build all possible valid segmentation trees."""
     text = " ".join(sentences)
-    if parent_registers is None:
-        probs, embeddings = predict_and_embed_batch([text])
-        parent_registers = get_strong_registers(probs[0])
-        required_labels = set(parent_registers)
+    probs, embeddings = predict_and_embed_batch([text])
+    registers = get_strong_registers(probs[0])
 
-        if len(text) < min_chars_per_segment or not parent_registers:
-            return [sentences], [probs[0]], embeddings, False
+    if len(text) < min_chars_per_segment:
+        return [
+            {"segments": [sentences], "probs": [probs[0]], "embeddings": embeddings}
+        ]
 
-    valid_splits = []
+    possible_trees = []
 
     # Try all possible split points
     for i in range(1, len(sentences)):
@@ -139,6 +140,7 @@ def recursive_segment(sentences, parent_registers=None, required_labels=None):
         left_text = " ".join(left_sentences)
         right_text = " ".join(right_sentences)
 
+        # Check minimum length
         if (
             len(left_text) < min_chars_per_segment
             or len(right_text) < min_chars_per_segment
@@ -146,62 +148,94 @@ def recursive_segment(sentences, parent_registers=None, required_labels=None):
             continue
 
         split_texts = [left_text, right_text]
-        probs, embeddings = predict_and_embed_batch(split_texts)
-        left_registers = set(get_strong_registers(probs[0]))
-        right_registers = set(get_strong_registers(probs[1]))
+        split_probs, split_embeddings = predict_and_embed_batch(split_texts)
+        left_registers = set(get_strong_registers(split_probs[0]))
+        right_registers = set(get_strong_registers(split_probs[1]))
 
-        # Skip if either segment has no strong registers
-        if not left_registers or not right_registers:
+        # Skip if either segment has no strong registers or same registers
+        if (
+            not left_registers
+            or not right_registers
+            or left_registers == right_registers
+        ):
             continue
 
-        # Skip if segments have same register patterns
-        if left_registers == right_registers:
-            continue
+        # Recursively build subtrees
+        left_trees = build_segmentation_trees(left_sentences)
+        right_trees = build_segmentation_trees(right_sentences)
 
-        # Calculate initial split score
-        split_score = len(left_registers ^ right_registers)
-        if split_score == 0:
-            continue
+        # Combine all possible left and right subtrees
+        for left_tree in left_trees:
+            for right_tree in right_trees:
+                tree = {
+                    "segments": left_tree["segments"] + right_tree["segments"],
+                    "probs": left_tree["probs"] + right_tree["probs"],
+                    "embeddings": torch.cat(
+                        [left_tree["embeddings"], right_tree["embeddings"]], dim=0
+                    ),
+                    "children": [left_tree, right_tree],
+                }
+                possible_trees.append(tree)
 
-        # Try recursive splits
-        left_segments, left_probs, left_embeddings, left_success = recursive_segment(
-            left_sentences, left_registers, required_labels
-        )
+    # Include the unsplit version
+    possible_trees.append(
+        {"segments": [sentences], "probs": [probs[0]], "embeddings": embeddings}
+    )
 
-        right_segments, right_probs, right_embeddings, right_success = (
-            recursive_segment(right_sentences, right_registers, required_labels)
-        )
+    return possible_trees
 
-        # If both splits found valid segmentations
-        if left_success and right_success:
-            # Calculate total labels found in this segmentation
-            all_labels = set()
-            for p in left_probs + right_probs:
-                all_labels.update(get_strong_registers(p))
 
-            # If this segmentation path covers all required labels
-            if required_labels.issubset(all_labels):
-                valid_splits.append(
-                    (
-                        split_score,
-                        left_segments + right_segments,
-                        left_probs + right_probs,
-                        torch.cat([left_embeddings, right_embeddings], dim=0),
-                    )
-                )
+def verify_label_constraints(tree, required_labels):
+    """Check if a tree satisfies our label constraints."""
+    found_labels = set()
 
-    # No valid splits found that satisfy requirements
-    if not valid_splits:
-        return (
-            [sentences],
-            [predict_and_embed_batch([text])[0][0]],
-            predict_and_embed_batch([text])[1],
-            False,
-        )
+    def collect_labels(subtree):
+        for probs in subtree["probs"]:
+            found_labels.update(get_strong_registers(probs))
+        if "children" in subtree:
+            for child in subtree["children"]:
+                collect_labels(child)
 
-    # Choose best split among valid ones (highest split score)
-    best_split = max(valid_splits, key=lambda x: x[0])
-    return best_split[1], best_split[2], best_split[3], True
+    collect_labels(tree)
+    return required_labels.issubset(found_labels)
+
+
+def find_best_valid_tree(trees, required_labels):
+    """Find the best tree that satisfies our constraints."""
+    valid_trees = [
+        tree for tree in trees if verify_label_constraints(tree, required_labels)
+    ]
+    if not valid_trees:
+        return None
+
+    def score_tree(tree):
+        if "children" not in tree:
+            return 0
+        left, right = tree["children"]
+        left_regs = set(get_strong_registers(left["probs"][0]))
+        right_regs = set(get_strong_registers(right["probs"][0]))
+        score = len(left_regs ^ right_regs)
+        return score + score_tree(left) + score_tree(right)
+
+    return max(valid_trees, key=score_tree)
+
+
+def recursive_segment(sentences):
+    # Get document-level labels
+    text = " ".join(sentences)
+    doc_probs, doc_embeddings = predict_and_embed_batch([text])
+    required_labels = set(get_strong_registers(doc_probs[0]))
+
+    # Build all possible trees
+    possible_trees = build_segmentation_trees(sentences)
+
+    # Find best valid tree
+    best_tree = find_best_valid_tree(possible_trees, required_labels)
+
+    if best_tree is None:
+        return [sentences], [doc_probs[0]], doc_embeddings
+
+    return best_tree["segments"], best_tree["probs"], best_tree["embeddings"]
 
 
 def process_tsv_file(input_file_path, output_file_path):
@@ -223,7 +257,7 @@ def process_tsv_file(input_file_path, output_file_path):
         document_labels = index_to_name(get_strong_registers(doc_probs[0]))
 
         # Recursively split text
-        segments, segment_probs, segment_embeddings, _ = recursive_segment(sentences)
+        segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
         # Create result dictionary
         result = {
