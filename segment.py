@@ -1,25 +1,32 @@
-import numpy as np
-from math import log2
-import torch
-import torch.nn.functional as F
-import pandas as pd
 import json
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoModel
-import spacy
-from tqdm import tqdm
 import sys
 
-MAIN_LABELS_ONLY = True
+import pandas as pd
+import spacy
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+# Parameters
+max_tokens = 512
+batch_size = 1
+min_words_per_segment = 50
+threshold = 0.4
 
-# Scoring parameters (weights for each component)
-ALPHA = 1.0  # Weight for average entropy
-BETA = 0.0  # Weight for average KL divergence
-GAMMA = 0.0  # Weight for mutual information
-DELTA = 0.0  # Weight for average variance
-LAMBDA = 0.05  # Tunable parameter for over-segmentation
-MU = 0.05  # Tunable parameter for short segments
+# Load register classification model
+model_name = "TurkuNLP/web-register-classification-multilingual"
+tokenizer_name = "xlm-roberta-large"
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+model.eval()
 
+# Load spaCy
+nlp = spacy.load("xx_ent_wiki_sm")
+if "sentencizer" not in nlp.pipe_names:
+    nlp.add_pipe("sentencizer")
+
+# Labels
 labels_structure = {
     "MT": [],
     "LY": [],
@@ -32,471 +39,216 @@ labels_structure = {
     "IP": ["ds", "ed"],
 }
 
-labels_all = [k for k in labels_structure.keys()] + [
+# Flat list of labels
+labels_list = [k for k in labels_structure.keys()] + [
     item for row in labels_structure.values() for item in row
 ]
 
-if MAIN_LABELS_ONLY:
-    labels_all = list(labels_structure.keys())
+# Sublabel index to parent index
+index_to_parent = {
+    labels_list.index(sublabel): labels_list.index(parent)
+    for parent, sublabels in labels_structure.items()
+    for sublabel in sublabels
+}
 
 
-def get_group_probabilities(prob_list):
-    group_probs = []
-
-    for label, children in labels_structure.items():
-        # Get index of parent label
-        parent_idx = labels_all.index(label)
-        parent_prob = prob_list[parent_idx]
-
-        if not children:  # Labels like MT, LY, ID
-            group_probs.append(parent_prob)
-        else:  # Labels like NA, IN, etc
-            # Get indices and probabilities of children
-            children_probs = [prob_list[labels_all.index(child)] for child in children]
-            # Take maximum probability in the group
-            group_probs.append(max(parent_prob, *children_probs))
-
-    return group_probs
+# Zero parents when child active
+def zero_parents(binary_list):
+    for child_idx, parent_idx in index_to_parent.items():
+        if child_idx < len(binary_list) and binary_list[child_idx] == 1:
+            binary_list[parent_idx] = 0
+    return binary_list
 
 
-def calculate_entropy(probabilities):
-    """
-    Calculate the entropy for a single set of probabilities (multilabel).
-    """
-    eps = 1e-12  # To avoid log(0)
-    probabilities = np.clip(
-        probabilities, eps, 1 - eps
-    )  # Clip probabilities to avoid numerical issues
-    entropy = -np.sum(probabilities * np.log(probabilities), axis=-1)
-    return entropy.mean()
+# Index to name mapping
+def index_to_name(indices):
+    return [labels_list[i] for i in indices]
 
 
-def calculate_multilabel_entropy(probabilities):
-    """
-    Calculate the entropy for multilabel predictions where each position
-    represents an independent binary decision.
-    """
-    eps = 1e-12  # To avoid log(0)
-    probabilities = np.clip(probabilities, eps, 1 - eps)
-
-    # Calculate binary entropy for each position
-    entropy = -(
-        probabilities * np.log(probabilities)
-        + (1 - probabilities) * np.log(1 - probabilities)
-    )
-
-    return entropy.mean()
-
-
-def calculate_kl_divergence(prob_a, prob_b):
-    """
-    Calculate KL divergence between two probability distributions (multilabel).
-    """
-    eps = 1e-12
-    prob_a = np.clip(prob_a, eps, 1 - eps)
-    prob_b = np.clip(prob_b, eps, 1 - eps)
-    kl_div = np.sum(prob_a * np.log(prob_a / prob_b), axis=-1)
-    return kl_div.mean()
-
-
-def calculate_mutual_information(global_probs, block_probs):
-    """
-    Calculate mutual information for a block given the global probabilities and the block probabilities.
-    """
-    global_entropy = calculate_multilabel_entropy(global_probs)
-    block_entropy = calculate_multilabel_entropy(block_probs)
-    return global_entropy - block_entropy
-
-
-def calculate_variance(probabilities):
-    """
-    Calculate the variance of probabilities within a block.
-    """
-    return np.var(probabilities, axis=0).mean()
-
-
-def score_partition(partition_predictions, global_predictions, n, partition_texts):
-    """
-    Compute the score for a given partition based on entropy, KL divergence, mutual information,
-    variance, and penalties for over-segmentation and short segments.
-    """
-    num_blocks = len(partition_predictions)
-
-    # Group probs
-    if not MAIN_LABELS_ONLY:
-        partition_predictions = [
-            get_group_probabilities(x) for x in partition_predictions
-        ]
-
-    # Calculate base metrics
-    avg_entropy = np.mean(
-        [calculate_multilabel_entropy(block) for block in partition_predictions]
-    )
-    avg_kl_div = 0.0
-
-    for i in range(num_blocks - 1):
-        avg_kl_div += calculate_kl_divergence(
-            partition_predictions[i], partition_predictions[i + 1]
-        )
-    if num_blocks > 1:
-        avg_kl_div /= num_blocks - 1
-
-    mutual_info = np.mean(
-        [
-            calculate_mutual_information(global_predictions, block)
-            for block in partition_predictions
-        ]
-    )
-    avg_variance = np.mean(
-        [calculate_variance(block) for block in partition_predictions]
-    )
-
-    # Calculate penalties
-
-    # 1. Over-segmentation penalty
-    # We need to pass the total number of sentences to this function
-    # Let's assume n is passed as an additional parameter
-    oversegmentation_penalty = num_blocks / n
-
-    # 2. Short segment penalty
-    # We need the original texts to calculate this
-    # Let's assume partition_texts is passed as an additional parameter
-
-    avg_length = np.mean([len(text.split()) for text in partition_texts])
-    short_penalties = [
-        max(0, 1 - len(text.split()) / (avg_length)) ** 2 for text in partition_texts
-    ]
-    short_segment_penalty = np.mean(short_penalties)
-
-    # Combine all components
-    score = (
-        ALPHA * -avg_entropy
-        + BETA * avg_kl_div
-        + GAMMA * mutual_info
-        - DELTA * avg_variance
-        - LAMBDA * oversegmentation_penalty  # Add penalties
-        - MU * short_segment_penalty
-    )
-    return score
-
-
-# Load register classification model
-model_name = "TurkuNLP/web-register-classification-multilingual"
-tokenizer_name = "xlm-roberta-large"
-model = AutoModelForSequenceClassification.from_pretrained(model_name)
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-max_tokens = 512
-min_words = 30
-max_segments = 20
-model = model.to(device)
-model.eval()
-
-# Load E5 embedding model
-embed_model_name = "intfloat/multilingual-e5-large"
-embed_model = AutoModel.from_pretrained(embed_model_name)
-embed_tokenizer = AutoTokenizer.from_pretrained(embed_model_name)
-embed_model = embed_model.to(device)
-embed_model.eval()
-
-# Load spaCy
-nlp = spacy.load("xx_ent_wiki_sm")
-if "sentencizer" not in nlp.pipe_names:
-    nlp.add_pipe("sentencizer")
-
-
-def predict_batch(texts, batch_size=32):
-    """Predict probabilities for a batch of texts."""
+# Predict probabilities and get embeddings for a batch of texts
+def predict_and_embed_batch(texts, batch_size=batch_size):
+    """Predict probabilities and get embeddings for a batch of texts."""
     all_probs = []
+    all_embeddings = []
 
-    # Process texts in batches
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
-
-        # Tokenize batch
         inputs = tokenizer(
             batch_texts,
             return_tensors="pt",
             truncation=True,
             padding=True,
             max_length=512,
-        )
-
-        # Move input tensors to GPU
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        # Get predictions
-        with torch.no_grad():
-            outputs = model(**inputs)
-
-        # Move predictions back to CPU and convert to numpy
-        batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
-
-        # Round to three decimals
-        batch_probs = [[round(prob, 3) for prob in probs] for probs in batch_probs]
-
-        if MAIN_LABELS_ONLY:
-            batch_probs = [probs[:9] for probs in batch_probs]
-        all_probs.extend(batch_probs)
-
-    return all_probs
-
-
-"""
-def get_embeddings_batch(texts, batch_size=32):
-    #Get embeddings for texts in batches using E5 model.
-    all_embeddings = []
-
-    # Add prefix for E5
-    texts = ["passage: " + text for text in texts]
-
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i : i + batch_size]
-
-        # Tokenize
-        inputs = embed_tokenizer(
-            batch_texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512,
         ).to(device)
 
-        # Get embeddings
         with torch.no_grad():
-            outputs = embed_model(**inputs)
-            # Mean pooling
-            attention_mask = inputs["attention_mask"]
-            token_embeddings = outputs.last_hidden_state
-            input_mask_expanded = (
-                attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-            )
-            embeddings = torch.sum(
-                token_embeddings * input_mask_expanded, 1
-            ) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-
-        all_embeddings.append(embeddings.cpu())
-
-    return torch.cat(all_embeddings, dim=0)
-"""
-
-
-def get_embeddings_batch(texts, batch_size=32):
-    """Get embeddings for texts in batches using RoBERTa model."""
-    all_embeddings = []
-
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i : i + batch_size]
-
-        # Tokenize batch using your existing RoBERTa tokenizer
-        inputs = tokenizer(
-            batch_texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512,
-        ).to(device)
-
-        # Get embeddings
-        with torch.no_grad():
-            # We need to modify the forward pass to get hidden states
-            outputs = model(
-                **inputs, output_hidden_states=True  # Request hidden states
-            )
-
-            # Get the last hidden state
+            outputs = model(**inputs, output_hidden_states=True)
+            batch_probs = torch.sigmoid(outputs.logits).detach().cpu().numpy()
             last_hidden_state = outputs.hidden_states[-1]
+            cls_embeddings = last_hidden_state[:, 0, :].cpu()
 
-            # Extract the [CLS] token embeddings (first token of each sequence)
-            cls_embeddings = last_hidden_state[:, 0, :]
+        all_probs.extend(batch_probs)
+        all_embeddings.append(cls_embeddings)
 
-        all_embeddings.append(cls_embeddings.cpu())
-
-    return torch.cat(all_embeddings, dim=0)
-
-
-def combine_short_sentences(
-    sentences, initial_min_words=min_words, max_segments=max_segments
-):
-    min_words = initial_min_words
-
-    def count_words(sentence):
-        return len(sentence.split())
-
-    while 1:
-        result = []
-        buffer = ""
-
-        for i, sentence in enumerate(sentences):
-            if count_words(sentence) >= min_words:
-                if buffer:
-                    result.append(buffer.strip())
-                    buffer = ""
-                result.append(sentence)
-            else:
-                buffer += (buffer and " ") + sentence
-
-                # If the buffer reaches min_words, finalize it
-                if count_words(buffer) >= min_words:
-                    result.append(buffer.strip())
-                    buffer = ""
-
-        # Handle leftover buffer
-        if buffer:
-            result.append(buffer.strip())
-
-        # Final pass: Ensure no sentences in the result are below min_words
-        i = 0
-        while i < len(result):
-            if count_words(result[i]) < min_words:
-                if i < len(result) - 1:  # Merge with the next sentence
-                    result[i + 1] = result[i] + " " + result[i + 1]
-                    result.pop(i)
-                elif i > 0:  # Merge with the previous sentence if it's the last one
-                    result[i - 1] += " " + result[i]
-                    result.pop(i)
-                else:  # Single short sentence case
-                    break
-            else:
-                i += 1
-        if len(result) <= max_segments:
-            return result
-        min_words += 1
+    all_embeddings = torch.cat(all_embeddings, dim=0)
+    return all_probs, all_embeddings
 
 
+# Split text into sentences
 def split_into_sentences(text):
+    """Split text into sentences using spaCy."""
     doc = nlp(text)
     return [sent.text.strip() for sent in doc.sents]
 
 
+# Truncate text to fit within model's token limit
 def truncate_text_to_tokens(text):
-    """Truncate text to fit within model's token limit"""
+    """Truncate text to fit within model's token limit."""
     tokens = tokenizer(text, truncation=True, max_length=max_tokens)
-    truncated_text = tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
-    return truncated_text
+    return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
 
 
-def generate_unique_subsequences(sentences):
-    """Generate all unique contiguous subsequences of sentences."""
-    n = len(sentences)
-    result = []
-    for start in range(n):
-        for length in range(1, n - start + 1):
-            subsequence = sentences[start : start + length]
-            result.append(subsequence)
-    return result
+# Count words in a text segment
+def get_word_count(text):
+    """Count words in a text segment."""
+    return len(text.split())
 
 
-def generate_partitionings_with_entropy(sentences):
-    """Generate partitionings considering both entropy and semantic differences."""
-    subsequences = generate_unique_subsequences(sentences)
-    print("Subsequences: ", len(subsequences))
+# Get indices of registers that pass the threshold (without parents)
+def get_strong_registers(probs):
+    binary_registers = [int(p >= threshold) for p in probs]
+    parents_zeroed = zero_parents(binary_registers)
+    indices = [i for i, p in enumerate(parents_zeroed) if p]
+    return indices
 
-    # Get all unique texts
-    texts = [" ".join(subseq) for subseq in subsequences]
 
-    # Get predictions and embeddings for all unique segments
-    predictions = predict_batch(texts)
-    embeddings = get_embeddings_batch(texts)
+# Recursively segment text based on register predictions.
+def recursive_segment(sentences, parent_registers=None):
+    # If we don't have parent registers (first call), analyze full text
+    text = " ".join(sentences)
+    if parent_registers is None:
+        probs, embeddings = predict_and_embed_batch([text])
+        parent_registers = get_strong_registers(probs[0])
 
-    n = len(sentences)
+        # If text is too short or no strong registers, return as is
+        if get_word_count(text) < min_words_per_segment or not parent_registers:
+            return [sentences], probs, embeddings
 
-    def build_partitions(current_partition, start_idx):
-        if start_idx == n:
-            results.append(current_partition[:])
-            return
+    best_split = None
+    best_split_score = -1
+    best_probs_left = None
+    best_probs_right = None
+    best_emb_left = None
+    best_emb_right = None
 
-        for idx, subsequence in enumerate(subsequences):
-            if subsequence[0] == sentences[start_idx]:
-                if start_idx + len(subsequence) <= n:
-                    current_partition.append(idx)
-                    build_partitions(current_partition, start_idx + len(subsequence))
-                    current_partition.pop()
+    # Try all possible split points
+    for i in range(1, len(sentences)):
+        left_text = " ".join(sentences[:i])
+        right_text = " ".join(sentences[i:])
 
-    results = []
-    build_partitions([], 0)
+        # Check minimum length requirement
+        if (
+            get_word_count(left_text) < min_words_per_segment
+            or get_word_count(right_text) < min_words_per_segment
+        ):
+            continue
 
-    print("Sentences:", len(sentences))
-    print("Partitions:", len(results))
+        # Get predictions for both segments
+        split_texts = [left_text, right_text]
+        probs, embeddings = predict_and_embed_batch(split_texts)
+        left_registers = get_strong_registers(probs[0])
+        right_registers = get_strong_registers(probs[1])
 
-    # Find partition with best combined score
-    # Initialize variables
-    max_score = -float("inf")
-    best_partition_indices = None
+        # Skip if either segment has no strong registers
+        if not left_registers or not right_registers:
+            continue
 
-    for partition_indices in results:
-        # Get the predictions from indices
-        partition_predictions = [predictions[idx] for idx in partition_indices]
+        # Check if at least one segment maintains continuity with parent
+        if not (
+            left_registers & parent_registers or right_registers & parent_registers
+        ):
+            continue
 
-        # Assume global predictions are the average of all predictions
-        global_predictions = np.mean(predictions, axis=0)
+        # Check if segments have different register patterns
+        if left_registers == right_registers:
+            continue
 
-        # Compute the score for this partition
-        score = score_partition(
-            partition_predictions,
-            global_predictions,
-            len(sentences),  # total number of sentences
-            [
-                " ".join(subsequences[idx]) for idx in partition_indices
-            ],  # texts for length calculation
-        )
+        # Calculate split score (number of different strong registers)
+        split_score = len(left_registers ^ right_registers)
 
-        if score > max_score:
-            max_score = score
-            best_partition_indices = partition_indices
+        if split_score > best_split_score:
+            best_split_score = split_score
+            best_split = i
+            best_probs_left = probs[0]
+            best_probs_right = probs[1]
+            best_emb_left = embeddings[0].unsqueeze(0)
+            best_emb_right = embeddings[1].unsqueeze(0)
 
-    # Convert best partition indices back to text
-    best_partition_text = [
-        [s for s in subsequences[idx]] for idx in best_partition_indices
-    ]
-    best_partition_probs = [
-        [round(float(y), 3) for y in predictions[idx]] for idx in best_partition_indices
-    ]
+    # If no valid split found, return current segment with its predictions
+    if best_split is None:
+        probs, embeddings = predict_and_embed_batch([text])
+        return [sentences], probs, embeddings
 
-    best_partition_embeddings = embeddings[best_partition_indices]
+    # Recursively process both segments
+    left_sentences = sentences[:best_split]
+    right_sentences = sentences[best_split:]
 
-    return (
-        best_partition_text,
-        best_partition_probs,
-        best_partition_embeddings,
-        round(max_score, 3),
+    # Get registers for recursive calls
+    left_registers = get_strong_registers(best_probs_left)
+    right_registers = get_strong_registers(best_probs_right)
+
+    # Make recursive calls with corresponding registers
+    left_segments, left_probs, left_embeddings = recursive_segment(
+        left_sentences, left_registers
+    )
+    right_segments, right_probs, right_embeddings = recursive_segment(
+        right_sentences, right_registers
     )
 
+    # If no further splits occurred, use the predictions from this level
+    if len(left_segments) == 1 and len(right_segments) == 1:
+        segments = [left_sentences, right_sentences]
+        segment_probs = [[p for p in best_probs_left], [p for p in best_probs_right]]
+        segment_embeddings = torch.cat([best_emb_left, best_emb_right], dim=0)
+    else:
+        # Further splits occurred, concatenate all results in order
+        segments = left_segments + right_segments
+        segment_probs = left_probs + right_probs
+        segment_embeddings = torch.cat([left_embeddings, right_embeddings], dim=0)
 
-def get_dominant_registers(probs, threshold=0.4):
-    """Get names of registers that pass the threshold."""
-    dominant = [labels_all[i] for i, p in enumerate(probs) if p >= threshold]
-    return dominant if dominant else ["None"]
+    return segments, segment_probs, segment_embeddings
 
 
 def process_tsv_file(input_file_path, output_file_path):
-    """Process texts from a TSV file and generate predictions, saving results to JSONL."""
-    # Read TSV file
+    """Process texts from TSV file using recursive splitting approach."""
+
     df = pd.read_csv(input_file_path, sep="\t", header=None)
 
-    # Process each text and write results to JSONL
     for idx, text in enumerate(df[1]):
+        # Preprocess text
         truncated_text = truncate_text_to_tokens(text)
-
-        # Split text into sentences
         sentences = split_into_sentences(truncated_text)
 
-        # Combine short sentences
-        combined_sentences = combine_short_sentences(sentences)
+        # Get document level predictions first
+        full_text = " ".join(sentences)
+        doc_probs, doc_embeddings = predict_and_embed_batch([full_text])
+        document_labels = index_to_name(get_strong_registers(doc_probs[0]))
 
-        # Generate partitions and predictions
-        best_partition, partition_probs, best_partition_embeddings, max_score = (
-            generate_partitionings_with_entropy(combined_sentences)
-        )
+        # Recursively split text
+        segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
-        # Create result dictionary with proper type conversion
+        # Create result dictionary
         result = {
-            "best_partition": best_partition,
-            "partition_probs": [
-                [float(prob) for prob in probs] for probs in partition_probs
+            "document_labels": document_labels,
+            "document_embeddings": doc_embeddings.tolist(),
+            "segments": segments,
+            "segment_labels": [
+                index_to_name(get_strong_registers(probs)) for probs in segment_probs
             ],
-            "best_partition_embeddings": best_partition_embeddings.tolist(),
-            "max_score": float(max_score),
+            "segment_probs": [
+                [round(float(prob), 3) for prob in probs] for probs in segment_probs
+            ],
+            "segment_embeddings": segment_embeddings.tolist(),
         }
 
         # Write to JSONL file
@@ -505,22 +257,23 @@ def process_tsv_file(input_file_path, output_file_path):
 
         # Print progress and results
         print(f"\nProcessed text {idx + 1}/{len(df)}")
-        print("Predictions for each part:")
-        for part, probs in zip(best_partition, partition_probs):
-            dominant_registers = get_dominant_registers(probs)
-            print(f"Dominant registers: {', '.join(dominant_registers)}")
-            print(f"Text: {' '.join(part)}")
+        print(f"Document-level labels: {document_labels}")
+        print("\nPredictions for each segment:")
+
+        for segment, probs, segment_labels in zip(
+            result["segments"], result["segment_probs"], result["segment_labels"]
+        ):
+            print(f"Segment labels: {segment_labels}")
+            print(f"Text: {' '.join(segment)}")
             print(f"Probabilities: {probs}\n")
-        print("Maximum combined score:", max_score)
         print("-" * 80)
 
 
-# Example usage
 if __name__ == "__main__":
-    # Get file name from sys argv
+    if len(sys.argv) != 3:
+        print("Usage: python3 segment.py input_file.tsv output_file.jsonl")
+        sys.exit(1)
+
     input_file = sys.argv[1]
-
-    # Output file, add _results before extension
-    output_file = input_file.replace(".tsv", "_results.jsonl")
-
+    output_file = sys.argv[2]
     process_tsv_file(input_file, output_file)
