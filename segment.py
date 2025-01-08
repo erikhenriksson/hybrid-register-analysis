@@ -9,7 +9,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 # Parameters
 max_tokens = 512
 batch_size = 1
-min_chars_per_segment = 500
+min_chars_per_segment = 400
 threshold = 0.4
 
 # Load register classification model
