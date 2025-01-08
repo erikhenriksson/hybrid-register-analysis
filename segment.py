@@ -119,7 +119,7 @@ def get_strong_registers(probs):
     binary_registers = [int(p >= threshold) for p in probs]
     parents_zeroed = zero_parents(binary_registers)
     indices = [i for i, p in enumerate(parents_zeroed) if p]
-    return indices
+    return set(indices)
 
 
 # Recursively segment text based on register predictions.
