@@ -8,9 +8,6 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from typing import List, Tuple, Dict, Optional
 from tqdm import tqdm
 
-# Constants
-MIN_CHARS = 300  # Minimum characters for a valid segment
-
 # Load register classification model
 model_name = "TurkuNLP/web-register-classification-multilingual"
 tokenizer_name = "xlm-roberta-large"
@@ -86,55 +83,74 @@ def get_embeddings(sentences: List[str]) -> np.ndarray:
     return np.array(embeddings)
 
 
-def find_register_split(
-    splits: List[Tuple[List[int], List[int]]], sentences: List[str]
+def find_optimal_split(
+    embeddings: np.ndarray, splits: List[Tuple[List[int], List[int]]]
 ) -> Dict:
-    """Find a single major register change point, if one exists."""
+    """Find the single best split that optimizes both dissimilarity between segments and similarity within segments."""
 
-    def get_segment_text(indices: List[int]) -> str:
-        return " ".join([sentences[i] for i in indices])
+    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    # Get document-level predictions
-    full_text = " ".join(sentences)
-    doc_predictions = set(get_predictions(full_text))
+    def get_segment_embedding(indices: List[int]) -> np.ndarray:
+        segment_embeddings = embeddings[indices]
+        return np.mean(segment_embeddings, axis=0)
 
-    best_split = {"split": None, "metrics": None}
+    def compute_internal_similarity(indices: List[int]) -> float:
+        if len(indices) <= 1:
+            return 1.0
+        segment_embeddings = embeddings[indices]
+        similarities = []
+        for i in range(len(indices)):
+            for j in range(i + 1, len(indices)):
+                similarities.append(
+                    cosine_similarity(segment_embeddings[i], segment_embeddings[j])
+                )
+        return np.mean(similarities) if similarities else 1.0
 
-    # For each potential split point
+    best_split = {"score": -1, "split": None, "metrics": None}
+
     for split_indices in splits:
         segment1_indices, segment2_indices = split_indices
 
-        # Get predictions for each segment
-        text1 = get_segment_text(segment1_indices)
-        text2 = get_segment_text(segment2_indices)
-        pred1 = set(get_predictions(text1))
-        pred2 = set(get_predictions(text2))
+        segment1_emb = get_segment_embedding(segment1_indices)
+        segment2_emb = get_segment_embedding(segment2_indices)
 
-        # Only consider it a valid split if:
-        # 1. The predictions are different
-        # 2. At least one segment has a register not in the document-level predictions
-        if pred1 != pred2 and (pred1 - doc_predictions or pred2 - doc_predictions):
-            metrics = {
-                "segment1_predictions": list(pred1),
-                "segment2_predictions": list(pred2),
-                "doc_predictions": list(doc_predictions),
-            }
+        inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
+        inter_segment_dissimilarity = 1 - inter_segment_similarity
+
+        segment1_internal_similarity = compute_internal_similarity(segment1_indices)
+        segment2_internal_similarity = compute_internal_similarity(segment2_indices)
+        avg_internal_similarity = np.mean(
+            [segment1_internal_similarity, segment2_internal_similarity]
+        )
+
+        combined_score = inter_segment_dissimilarity * avg_internal_similarity
+
+        metrics = {
+            "inter_segment_dissimilarity": float(inter_segment_dissimilarity),
+            "avg_internal_similarity": float(avg_internal_similarity),
+            "segment1_internal_similarity": float(segment1_internal_similarity),
+            "segment2_internal_similarity": float(segment2_internal_similarity),
+            "combined_score": float(combined_score),
+        }
+
+        if combined_score > best_split["score"]:
+            best_split["score"] = combined_score
             best_split["split"] = split_indices
             best_split["metrics"] = metrics
-            break  # Take the first significant register change
 
     return best_split
 
 
 def process_text_recursive(text: str) -> Dict:
-    """Process a text recursively, attempting to split it only at major register changes."""
+    """Process a text recursively, attempting to split it and its resulting segments."""
     # Split into sentences using spaCy
     doc = nlp(text)
     sentences = [sent.text.strip() for sent in doc.sents]
 
     # If text is too short, return it as a leaf segment
     total_text = " ".join(sentences)
-    if len(total_text) < MIN_CHARS * 2:  # Need enough for two segments
+    if len(total_text) < 500:  # Too short to split into two 250-char segments
         return {
             "text": total_text,
             "sentences": sentences,
@@ -151,6 +167,9 @@ def process_text_recursive(text: str) -> Dict:
             "is_leaf": True,
         }
 
+    # Get embeddings for sentences
+    embeddings = get_embeddings(sentences)
+
     # Generate binary splits that meet minimum length requirement
     splits = []
     for i in range(1, len(sentences)):
@@ -162,7 +181,7 @@ def process_text_recursive(text: str) -> Dict:
         right_text = " ".join([sentences[j] for j in right_indices])
 
         # Only include split if both segments meet minimum length
-        if len(left_text) >= MIN_CHARS and len(right_text) >= MIN_CHARS:
+        if len(left_text) >= 250 and len(right_text) >= 250:
             splits.append((left_indices, right_indices))
 
     # If no valid splits are found, return as leaf
@@ -174,47 +193,17 @@ def process_text_recursive(text: str) -> Dict:
             "is_leaf": True,
         }
 
-    # Find a significant register change
-    best_split = find_register_split(splits, sentences)
-
-    # Only split if we found a significant register change
-    if best_split["split"] is None:
-        return {
-            "text": total_text,
-            "sentences": sentences,
-            "predictions": get_predictions(total_text),
-            "is_leaf": True,
-        }
-
+    # Find optimal split
+    best_split = find_optimal_split(embeddings, splits)
     split_indices = best_split["split"]
 
     # Get text for each segment
     segment1_text = " ".join([sentences[i] for i in split_indices[0]])
     segment2_text = " ".join([sentences[i] for i in split_indices[1]])
 
-    # Only recursively process segments if they have different registers from parent
-    segment1_preds = set(get_predictions(segment1_text))
-    segment2_preds = set(get_predictions(segment2_text))
-    doc_preds = set(get_predictions(total_text))
-
-    # If both segments have the same registers as the parent, don't split further
-    if segment1_preds.issubset(doc_preds) and segment2_preds.issubset(doc_preds):
-        segment1_analysis = {
-            "text": segment1_text,
-            "sentences": [sentences[i] for i in split_indices[0]],
-            "predictions": list(segment1_preds),
-            "is_leaf": True,
-        }
-        segment2_analysis = {
-            "text": segment2_text,
-            "sentences": [sentences[i] for i in split_indices[1]],
-            "predictions": list(segment2_preds),
-            "is_leaf": True,
-        }
-    else:
-        # Otherwise try to split further
-        segment1_analysis = process_text_recursive(segment1_text)
-        segment2_analysis = process_text_recursive(segment2_text)
+    # Recursively process each segment
+    segment1_analysis = process_text_recursive(segment1_text)
+    segment2_analysis = process_text_recursive(segment2_text)
 
     return {
         "text": total_text,
