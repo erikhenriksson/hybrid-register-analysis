@@ -142,19 +142,33 @@ def process_text(text: str) -> Dict:
     doc = nlp(text)
     sentences = [sent.text.strip() for sent in doc.sents]
 
-    # Only process if we have enough sentences
+    # Check if text is long enough to potentially split
+    total_text = " ".join(sentences)
+    if len(total_text) < 1000:  # Need at least 1000 chars to make two 500-char segments
+        return {
+            "error": "Text is too short for meaningful segmentation (needs 1000+ characters)"
+        }
+
+    # Check if we have enough sentences
     if len(sentences) < 2:
         return {"error": "Text has fewer than 2 sentences"}
 
     # Get embeddings for sentences
     embeddings = get_embeddings(sentences)
 
-    # Generate all possible binary splits
+    # Generate binary splits that meet minimum length requirement
     splits = []
     for i in range(1, len(sentences)):
-        left = list(range(i))
-        right = list(range(i, len(sentences)))
-        splits.append((left, right))
+        left_indices = list(range(i))
+        right_indices = list(range(i, len(sentences)))
+
+        # Get text for each potential segment
+        left_text = " ".join([sentences[j] for j in left_indices])
+        right_text = " ".join([sentences[j] for j in right_indices])
+
+        # Only include split if both segments meet minimum length
+        if len(left_text) >= 500 and len(right_text) >= 500:
+            splits.append((left_indices, right_indices))
 
     # Find optimal split
     best_split = find_optimal_split(embeddings, splits)
@@ -205,14 +219,34 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
             # Process the text
             results = process_text(text)
 
-            # Add metadata
+            if "error" in results:
+                print(f"\nDocument {idx}: {results['error']}\n")
+            else:
+                print(f"\nDocument {idx}:")
+                print(
+                    f"Document labels: {', '.join(results['predictions']['full_text'])}"
+                )
+                print(
+                    f"Segment 1 labels: {', '.join(results['predictions']['segment1'])}"
+                )
+                print(
+                    f"Segment 1: {results['optimal_split']['segment1']['text'][:100]}..."
+                )
+                print("----")
+                print(
+                    f"Segment 2 labels: {', '.join(results['predictions']['segment2'])}"
+                )
+                print(
+                    f"Segment 2: {results['optimal_split']['segment2']['text'][:100]}..."
+                )
+                print("\n")
+
+            # Add metadata and write to JSONL
             output_record = {
                 "text_id": idx,
                 "true_labels": true_labels,
                 "analysis": results,
             }
-
-            # Write to JSONL file
             f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
 
 
