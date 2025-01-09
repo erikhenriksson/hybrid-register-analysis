@@ -204,8 +204,8 @@ def process_text_recursive(text: str) -> Dict:
     # Find optimal split
     best_split = find_optimal_split(embeddings, splits)
 
-    # Only split if it's a clear local maximum
-    if not best_split["is_local_maximum"]:
+    # Only split if we found a significant split
+    if best_split["split"] is None:
         return {
             "text": total_text,
             "sentences": sentences,
