@@ -213,7 +213,9 @@ def recursive_segment(sentences, parent_labels=None):
 def process_tsv_file(input_file_path, output_file_path):
     """Process texts from TSV file using recursive splitting approach."""
 
-    df = pd.read_csv(input_file_path, sep="\t", header=None)
+    df = pd.read_csv(
+        input_file_path, sep="\t", header=None, na_values="", keep_default_na=False
+    )
 
     for idx, row in df.iterrows():
         true_labels = row[0]  # Get true labels from first column
