@@ -226,7 +226,9 @@ def process_tsv_file(input_file_path, output_file_path):
         # Get document level predictions first
         full_text = " ".join(sentences)
         doc_probs, doc_embeddings = predict_and_embed_batch([full_text])
-        document_labels = index_to_name(get_strong_registers(doc_probs[0]))
+        document_labels = index_to_name(
+            modify_parent(get_strong_registers(doc_probs[0]), 1)
+        )
 
         # Recursively split text - now handling 5 return values
         segments, segment_probs, segment_embeddings = recursive_segment(sentences)
