@@ -142,6 +142,14 @@ def find_optimal_split(
     return best_split
 
 
+def get_text_embedding(text: str) -> np.ndarray:
+    """Get embedding for a full text string."""
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents]
+    sentence_embeddings = get_embeddings(sentences)
+    return np.mean(sentence_embeddings, axis=0)
+
+
 def process_text_recursive(text: str) -> Dict:
     """Process a text recursively, attempting to split it and its resulting segments."""
     # Split into sentences using spaCy
@@ -150,11 +158,13 @@ def process_text_recursive(text: str) -> Dict:
 
     # If text is too short, return it as a leaf segment
     total_text = " ".join(sentences)
-    if len(total_text) < 600:  # Too short to split into two 250-char segments
+    text_embedding = get_text_embedding(total_text)
+
+    if len(total_text) < 500:  # Too short to split into two 250-char segments
         return {
             "text": total_text,
-            "sentences": sentences,
             "predictions": get_predictions(total_text),
+            "embedding": text_embedding.tolist(),
             "is_leaf": True,
         }
 
@@ -162,8 +172,8 @@ def process_text_recursive(text: str) -> Dict:
     if len(sentences) < 2:
         return {
             "text": total_text,
-            "sentences": sentences,
             "predictions": get_predictions(total_text),
+            "embedding": text_embedding.tolist(),
             "is_leaf": True,
         }
 
@@ -181,15 +191,15 @@ def process_text_recursive(text: str) -> Dict:
         right_text = " ".join([sentences[j] for j in right_indices])
 
         # Only include split if both segments meet minimum length
-        if len(left_text) >= 300 and len(right_text) >= 300:
+        if len(left_text) >= 250 and len(right_text) >= 250:
             splits.append((left_indices, right_indices))
 
     # If no valid splits are found, return as leaf
     if not splits:
         return {
             "text": total_text,
-            "sentences": sentences,
             "predictions": get_predictions(total_text),
+            "embedding": text_embedding.tolist(),
             "is_leaf": True,
         }
 
@@ -207,8 +217,8 @@ def process_text_recursive(text: str) -> Dict:
 
     return {
         "text": total_text,
-        "sentences": sentences,
         "predictions": get_predictions(total_text),
+        "embedding": text_embedding.tolist(),
         "is_leaf": False,
         "split_metrics": best_split["metrics"],
         "segments": [segment1_analysis, segment2_analysis],
@@ -223,7 +233,7 @@ def collect_segments(segment: Dict) -> List[Dict]:
             {
                 "text": segment["text"],
                 "predictions": segment["predictions"],
-                "is_leaf": True,
+                "embedding": segment["embedding"],
             }
         ]
     else:
@@ -234,45 +244,12 @@ def collect_segments(segment: Dict) -> List[Dict]:
         return result
 
 
-def combine_same_register_segments(segments: List[Dict]) -> List[Dict]:
-    """Combine adjacent segments that share the same register predictions."""
-    if not segments:
-        return []
-
-    combined = []
-    current_segment = segments[0].copy()
-
-    for next_segment in segments[1:]:
-        # Convert predictions to set for comparison
-        current_preds = set(current_segment["predictions"])
-        next_preds = set(next_segment["predictions"])
-
-        # If predictions match (including empty sets), combine segments
-        if current_preds == next_preds:
-            current_segment["text"] += " " + next_segment["text"]
-            current_segment["length"] = len(current_segment["text"])
-        else:
-            # Store length before adding to combined list
-            current_segment["length"] = len(current_segment["text"])
-            combined.append(current_segment)
-            current_segment = next_segment.copy()
-
-    # Don't forget to add the last segment
-    current_segment["length"] = len(current_segment["text"])
-    combined.append(current_segment)
-
-    return combined
-
-
 def print_segments(segments: List[Dict]):
     """Helper function to print final segments."""
-    # Combine segments with same register before printing
-    combined_segments = combine_same_register_segments(segments)
-
-    print(f"\nTotal final segments after combining: {len(combined_segments)}")
-    for i, segment in enumerate(combined_segments, 1):
+    print(f"\nTotal final segments: {len(segments)}")
+    for i, segment in enumerate(segments, 1):
         print(f"\nSegment {i}:")
-        print(f"Length: {segment['length']} chars")
+        print(f"Length: {len(segment['text'])} chars")
         print(f"Predictions: {', '.join(segment['predictions'])}")
         print(f"Text: {segment['text']}")
 
@@ -292,21 +269,26 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
             # Process the text recursively
             results = process_text_recursive(text)
 
-            # Collect all segments
-            all_segments = collect_segments(results)
+            # Collect final segments
+            final_segments = collect_segments(results)
 
+            # Print results
             print(f"\nDocument {idx}:")
             print(f"True labels: {', '.join(true_labels)}")
             print(f"Document-level predictions: {', '.join(results['predictions'])}")
-            print_segments(all_segments)
+            print_segments(final_segments)
             print("\n")
 
-            # Add metadata and write to JSONL in flat structure
+            # Create clean output structure
             output_record = {
                 "text_id": idx,
-                "true_labels": true_labels,
-                "document_predictions": results["predictions"],
-                "segments": all_segments,
+                "document": {
+                    "text": text,
+                    "true_labels": true_labels,
+                    "predictions": results["predictions"],
+                    "embedding": results["embedding"],
+                },
+                "segments": final_segments,
             }
             f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
 
