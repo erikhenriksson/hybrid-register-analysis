@@ -23,6 +23,13 @@ if "sentencizer" not in nlp.pipe_names:
     nlp.add_pipe("sentencizer")
 
 
+# Truncate text to fit within model's token limit
+def truncate_text_to_tokens(text):
+    """Truncate text to fit within model's token limit."""
+    tokens = tokenizer(text, truncation=True, max_length=max_tokens)
+    return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
+
+
 def get_predictions(text: str) -> List[str]:
     """Get multilabel predictions for a text segment."""
     with torch.no_grad():
@@ -215,6 +222,7 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
         for idx, row in tqdm(df.iterrows(), total=len(df)):
             true_labels = row[0].split()  # Assuming labels are space-separated
             text = row[1]
+            text = truncate_text_to_tokens(text)
 
             # Process the text
             results = process_text(text)
@@ -222,7 +230,7 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
             if "error" in results:
                 print(f"\nDocument {idx}: {results['error']}\n")
             else:
-                print(f"\nDocument {idx}:")
+                print(f"\nDocument {idx} (true labels: {true_labels}):")
                 print(
                     f"Document labels: {', '.join(results['predictions']['full_text'])}"
                 )
