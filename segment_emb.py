@@ -243,7 +243,7 @@ def print_segments(segments: List[Dict]):
         print(f"Predictions: {', '.join(segment['predictions'])}")
         if "split_metrics" in segment:
             print(f"Split metrics: {segment['split_metrics']}")
-        print(f"Text: {segment['text'][:100]}...")
+        print(f"Text: {segment['text']}...")
 
 
 def process_tsv_file(input_file_path: str, output_file_path: str):
