@@ -216,34 +216,55 @@ def process_text_recursive(text: str) -> Dict:
 
 
 def collect_segments(segment: Dict) -> List[Dict]:
-    """Helper function to collect all segments in a flat list."""
+    """Helper function to collect leaf segments and final splits in a flat list."""
     segments = []
 
-    # Add current segment
-    segment_info = {"text": segment["text"], "predictions": segment["predictions"]}
+    if segment["is_leaf"]:
+        # For leaf nodes, just add the segment
+        segments.append(
+            {"text": segment["text"], "predictions": segment["predictions"]}
+        )
+    else:
+        # For non-leaf nodes, add this split and recurse
+        segment1, segment2 = segment["segments"]
+        segments.append(
+            {
+                "text": segment1["text"],
+                "predictions": segment1["predictions"],
+                "split_metrics": segment["split_metrics"],
+                "is_first_segment": True,
+            }
+        )
+        segments.append(
+            {
+                "text": segment2["text"],
+                "predictions": segment2["predictions"],
+                "is_second_segment": True,
+            }
+        )
 
-    if not segment["is_leaf"]:
-        segment_info["split_metrics"] = segment["split_metrics"]
-
-    segments.append(segment_info)
-
-    # Recursively collect sub-segments
-    if not segment["is_leaf"]:
-        segments.extend(collect_segments(segment["segments"][0]))
-        segments.extend(collect_segments(segment["segments"][1]))
+        # Continue recursing on both segments
+        segments.extend(collect_segments(segment1))
+        segments.extend(collect_segments(segment2))
 
     return segments
 
 
 def print_segments(segments: List[Dict]):
-    """Helper function to print segments in a flat structure."""
+    """Helper function to print segments in a flat structure, showing split hierarchy."""
     for i, segment in enumerate(segments):
-        print(f"\nSegment {i}:")
+        if "is_first_segment" in segment:
+            print(f"\nSplit {i//2 + 1}:")
+            print(f"Split metrics: {segment['split_metrics']}")
+            print("First segment:")
+        elif "is_second_segment" in segment:
+            print("Second segment:")
+        else:
+            print(f"\nLeaf segment {i}:")
+
         print(f"Length: {len(segment['text'])} chars")
         print(f"Predictions: {', '.join(segment['predictions'])}")
-        if "split_metrics" in segment:
-            print(f"Split metrics: {segment['split_metrics']}")
-        print(f"Text: {segment['text']}...")
+        print(f"Text: {segment['text']}")  # Print full text without truncation
 
 
 def process_tsv_file(input_file_path: str, output_file_path: str):
