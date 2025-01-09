@@ -8,6 +8,9 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from typing import List, Tuple, Dict, Optional
 from tqdm import tqdm
 
+# Constants
+MIN_CHARS = 300  # Minimum characters for a valid segment
+
 # Load register classification model
 model_name = "TurkuNLP/web-register-classification-multilingual"
 tokenizer_name = "xlm-roberta-large"
@@ -100,54 +103,50 @@ def find_optimal_split(
     ) -> Tuple[float, Dict]:
         segment1_indices, segment2_indices = split_indices
 
-        # Get embeddings for each segment
+        # Get embeddings for each segment and full document
         segment1_emb = get_segment_embedding(segment1_indices)
         segment2_emb = get_segment_embedding(segment2_indices)
-
-        # Compare segments to each other
-        inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
-        inter_segment_dissimilarity = 1 - inter_segment_similarity
-
-        # Compare each segment to the overall document
         full_doc_emb = get_segment_embedding(list(range(len(embeddings))))
-        seg1_doc_diff = 1 - cosine_similarity(segment1_emb, full_doc_emb)
-        seg2_doc_diff = 1 - cosine_similarity(segment2_emb, full_doc_emb)
 
-        # Score based on how different segments are from each other AND from the overall document
-        combined_score = (
-            inter_segment_dissimilarity * (seg1_doc_diff + seg2_doc_diff) / 2
-        )
+        # Get segment-to-segment difference
+        inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
+
+        # Get segment-to-document differences
+        seg1_doc_sim = cosine_similarity(segment1_emb, full_doc_emb)
+        seg2_doc_sim = cosine_similarity(segment2_emb, full_doc_emb)
+
+        # If segments are more similar to each other than to the document average,
+        # this is probably not a real split point
+        if inter_segment_similarity > (seg1_doc_sim + seg2_doc_sim) / 2:
+            return 0.0, {}
+
+        # Score based on how different the segments are
+        split_score = 1 - inter_segment_similarity
 
         metrics = {
-            "inter_segment_dissimilarity": float(inter_segment_dissimilarity),
-            "segment1_doc_difference": float(seg1_doc_diff),
-            "segment2_doc_difference": float(seg2_doc_diff),
-            "combined_score": float(combined_score),
+            "inter_segment_similarity": float(inter_segment_similarity),
+            "seg1_doc_similarity": float(seg1_doc_sim),
+            "seg2_doc_similarity": float(seg2_doc_sim),
+            "split_score": float(split_score),
         }
 
-        return combined_score, metrics
+        return split_score, metrics
 
-    # Compute scores for all splits
+    # Try all possible splits
     split_scores = []
     for split in splits:
         score, metrics = compute_split_score(split)
-        split_scores.append((score, split, metrics))
+        if score > 0:  # Only consider splits that passed our basic check
+            split_scores.append((score, split, metrics))
 
-    # Only consider a split if it's significantly better than typical
-    scores = [s[0] for s in split_scores]
-    mean_score = np.mean(scores)
-    std_score = np.std(scores)
+    # If no splits passed our basic quality check, return no split
+    if not split_scores:
+        return {"score": -1, "split": None, "metrics": None}
 
-    # Find best split among significant ones
-    best_split = {"score": -1, "split": None, "metrics": None}
+    # Find the best split among qualifying ones
+    best_score, best_split, best_metrics = max(split_scores, key=lambda x: x[0])
 
-    for score, split, metrics in split_scores:
-        if score > mean_score + std_score and score > best_split["score"]:
-            best_split["score"] = score
-            best_split["split"] = split
-            best_split["metrics"] = metrics
-
-    return best_split
+    return {"score": best_score, "split": best_split, "metrics": best_metrics}
 
 
 def process_text_recursive(text: str) -> Dict:
@@ -158,7 +157,7 @@ def process_text_recursive(text: str) -> Dict:
 
     # If text is too short, return it as a leaf segment
     total_text = " ".join(sentences)
-    if len(total_text) < 1000:  # Too short to split into two 250-char segments
+    if len(total_text) < MIN_CHARS * 2:  # Need enough for two segments
         return {
             "text": total_text,
             "sentences": sentences,
@@ -189,7 +188,7 @@ def process_text_recursive(text: str) -> Dict:
         right_text = " ".join([sentences[j] for j in right_indices])
 
         # Only include split if both segments meet minimum length
-        if len(left_text) >= 500 and len(right_text) >= 500:
+        if len(left_text) >= MIN_CHARS and len(right_text) >= MIN_CHARS:
             splits.append((left_indices, right_indices))
 
     # If no valid splits are found, return as leaf
