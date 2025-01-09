@@ -120,19 +120,22 @@ def get_strong_registers(probs):
     return set(indices)
 
 
-def recursive_segment(sentences):
+def recursive_segment(sentences, depth=0):
     """
     Returns: (segments, probs, embeddings)
     """
     text = " ".join(sentences)
-
-    print("text:", text)
+    print(
+        f"Depth {depth}: Processing segment of length {len(text)} with {len(sentences)} sentences"
+    )
 
     # Get current segment's registers - these must be preserved in any split
     base_probs, base_embeddings = predict_and_embed_batch([text])
     base_registers = set(get_strong_registers(base_probs[0]))
+    print(f"Depth {depth}: Found registers: {base_registers}")
 
     if len(text) < min_chars_per_segment:
+        print(f"Depth {depth}: Segment too small, returning")
         return [sentences], [base_probs[0]], base_embeddings
 
     # Try every possible split point
@@ -140,6 +143,7 @@ def recursive_segment(sentences):
     best_score = -1
 
     for i in range(1, len(sentences)):
+        print(f"Depth {depth}: Trying split at position {i}/{len(sentences)}")
         left_sentences = sentences[:i]
         right_sentences = sentences[i:]
 
@@ -158,22 +162,24 @@ def recursive_segment(sentences):
         left_registers = set(get_strong_registers(probs[0]))
         right_registers = set(get_strong_registers(probs[1]))
 
+        print(f"Depth {depth}: Left registers: {left_registers}")
+        print(f"Depth {depth}: Right registers: {right_registers}")
+
         # Must find all base registers in the union of left and right
         if not base_registers.issubset(left_registers.union(right_registers)):
             continue
 
-        # Skip if segments have identical registers
-        if left_registers == right_registers:
-            continue
-
-        # Calculate split score
         split_score = len(left_registers ^ right_registers)
-        if split_score == 0:
+        if split_score == 0:  # Skip if registers are identical
             continue
 
         # Recursively split both sides
-        left_segments, left_probs, left_embs = recursive_segment(left_sentences)
-        right_segments, right_probs, right_embs = recursive_segment(right_sentences)
+        left_segments, left_probs, left_embs = recursive_segment(
+            left_sentences, depth + 1
+        )
+        right_segments, right_probs, right_embs = recursive_segment(
+            right_sentences, depth + 1
+        )
 
         # Store this as best split if it has highest register difference
         if split_score > best_score:
@@ -186,8 +192,10 @@ def recursive_segment(sentences):
 
     # If no valid split found, return current segment
     if best_segmentation is None:
+        print(f"Depth {depth}: No valid split found, returning unsplit")
         return [sentences], [base_probs[0]], base_embeddings
 
+    print(f"Depth {depth}: Returning best split with score {best_score}")
     return best_segmentation
 
 
