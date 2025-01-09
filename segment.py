@@ -233,7 +233,7 @@ def process_tsv_file(input_file_path, output_file_path):
 
         # Get segment labels
         segment_labels = [
-            index_to_name(modify_parent(get_strong_registers(probs)), 1)
+            index_to_name(modify_parent(get_strong_registers(probs), 1))
             for probs in segment_probs
         ]
         # Create result dictionary
