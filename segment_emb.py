@@ -87,9 +87,11 @@ def get_embeddings(sentences: List[str]) -> np.ndarray:
 
 
 def find_optimal_split(
-    embeddings: np.ndarray, splits: List[Tuple[List[int], List[int]]]
+    embeddings: np.ndarray,
+    splits: List[Tuple[List[int], List[int]]],
+    sentences: List[str],
 ) -> Dict:
-    """Find the single best split by comparing against the overall document structure."""
+    """Find the single best split based primarily on register changes."""
 
     def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -98,55 +100,53 @@ def find_optimal_split(
         segment_embeddings = embeddings[indices]
         return np.mean(segment_embeddings, axis=0)
 
-    def compute_split_score(
-        split_indices: Tuple[List[int], List[int]]
-    ) -> Tuple[float, Dict]:
+    def get_segment_text(indices: List[int]) -> str:
+        return " ".join([sentences[i] for i in indices])
+
+    def has_register_change(
+        text1: str, text2: str
+    ) -> Tuple[bool, List[str], List[str]]:
+        """Check if there's a meaningful register change between segments."""
+        pred1 = set(get_predictions(text1))
+        pred2 = set(get_predictions(text2))
+
+        # Consider it a change if the predictions are different
+        return (pred1 != pred2), list(pred1), list(pred2)
+
+    best_split = {"score": -1, "split": None, "metrics": None}
+
+    for split_indices in splits:
         segment1_indices, segment2_indices = split_indices
 
-        # Get embeddings for each segment and full document
+        # First check for register change
+        text1 = get_segment_text(segment1_indices)
+        text2 = get_segment_text(segment2_indices)
+        has_change, pred1, pred2 = has_register_change(text1, text2)
+
+        if not has_change:
+            continue  # Skip if no register change
+
+        # If we have a register change, check embedding similarity
         segment1_emb = get_segment_embedding(segment1_indices)
         segment2_emb = get_segment_embedding(segment2_indices)
-        full_doc_emb = get_segment_embedding(list(range(len(embeddings))))
+        similarity = cosine_similarity(segment1_emb, segment2_emb)
 
-        # Get segment-to-segment difference
-        inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
-
-        # Get segment-to-document differences
-        seg1_doc_sim = cosine_similarity(segment1_emb, full_doc_emb)
-        seg2_doc_sim = cosine_similarity(segment2_emb, full_doc_emb)
-
-        # If segments are more similar to each other than to the document average,
-        # this is probably not a real split point
-        if inter_segment_similarity > (seg1_doc_sim + seg2_doc_sim) / 2:
-            return 0.0, {}
-
-        # Score based on how different the segments are
-        split_score = 1 - inter_segment_similarity
+        # Score based primarily on the embedding difference
+        score = 1 - similarity
 
         metrics = {
-            "inter_segment_similarity": float(inter_segment_similarity),
-            "seg1_doc_similarity": float(seg1_doc_sim),
-            "seg2_doc_similarity": float(seg2_doc_sim),
-            "split_score": float(split_score),
+            "similarity": float(similarity),
+            "score": float(score),
+            "segment1_predictions": pred1,
+            "segment2_predictions": pred2,
         }
 
-        return split_score, metrics
+        if score > best_split["score"]:
+            best_split["score"] = score
+            best_split["split"] = split_indices
+            best_split["metrics"] = metrics
 
-    # Try all possible splits
-    split_scores = []
-    for split in splits:
-        score, metrics = compute_split_score(split)
-        if score > 0:  # Only consider splits that passed our basic check
-            split_scores.append((score, split, metrics))
-
-    # If no splits passed our basic quality check, return no split
-    if not split_scores:
-        return {"score": -1, "split": None, "metrics": None}
-
-    # Find the best split among qualifying ones
-    best_score, best_split, best_metrics = max(split_scores, key=lambda x: x[0])
-
-    return {"score": best_score, "split": best_split, "metrics": best_metrics}
+    return best_split
 
 
 def process_text_recursive(text: str) -> Dict:
