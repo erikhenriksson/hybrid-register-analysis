@@ -109,6 +109,13 @@ def find_optimal_split(
 
     best_split = {"score": -1, "split": None, "metrics": None}
 
+    # Minimum dissimilarity threshold - only split if segments are clearly different
+    MIN_DISSIMILARITY = 0.15
+    # Minimum internal similarity - ensure segments are coherent
+    MIN_INTERNAL_SIMILARITY = 0.7
+    # Length balance penalty - discourage very uneven splits
+    LENGTH_BALANCE_WEIGHT = 0.3
+
     for split_indices in splits:
         segment1_indices, segment2_indices = split_indices
 
@@ -118,19 +125,41 @@ def find_optimal_split(
         inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
         inter_segment_dissimilarity = 1 - inter_segment_similarity
 
+        # If dissimilarity is too low, skip this split
+        if inter_segment_dissimilarity < MIN_DISSIMILARITY:
+            continue
+
         segment1_internal_similarity = compute_internal_similarity(segment1_indices)
         segment2_internal_similarity = compute_internal_similarity(segment2_indices)
+
+        # If either segment is not internally coherent, skip
+        if (
+            min(segment1_internal_similarity, segment2_internal_similarity)
+            < MIN_INTERNAL_SIMILARITY
+        ):
+            continue
+
         avg_internal_similarity = np.mean(
             [segment1_internal_similarity, segment2_internal_similarity]
         )
 
-        combined_score = inter_segment_dissimilarity * avg_internal_similarity
+        # Add length balance penalty
+        len1 = len(segment1_indices)
+        len2 = len(segment2_indices)
+        total_len = len1 + len2
+        balance = min(len1, len2) / total_len
+        length_penalty = 1 - (LENGTH_BALANCE_WEIGHT * (1 - balance))
+
+        combined_score = (
+            inter_segment_dissimilarity * avg_internal_similarity * length_penalty
+        )
 
         metrics = {
             "inter_segment_dissimilarity": float(inter_segment_dissimilarity),
             "avg_internal_similarity": float(avg_internal_similarity),
             "segment1_internal_similarity": float(segment1_internal_similarity),
             "segment2_internal_similarity": float(segment2_internal_similarity),
+            "length_balance": float(balance),
             "combined_score": float(combined_score),
         }
 
@@ -150,7 +179,7 @@ def process_text_recursive(text: str) -> Dict:
 
     # If text is too short, return it as a leaf segment
     total_text = " ".join(sentences)
-    if len(total_text) < 500:  # Too short to split into two 250-char segments
+    if len(total_text) < 750:  # Increased minimum length for splitting
         return {
             "text": total_text,
             "sentences": sentences,
