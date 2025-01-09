@@ -150,7 +150,7 @@ def process_text_recursive(text: str) -> Dict:
 
     # If text is too short, return it as a leaf segment
     total_text = " ".join(sentences)
-    if len(total_text) < 750:  # Too short to split into two 250-char segments
+    if len(total_text) < 600:  # Too short to split into two 250-char segments
         return {
             "text": total_text,
             "sentences": sentences,
@@ -181,7 +181,7 @@ def process_text_recursive(text: str) -> Dict:
         right_text = " ".join([sentences[j] for j in right_indices])
 
         # Only include split if both segments meet minimum length
-        if len(left_text) >= 375 and len(right_text) >= 375:
+        if len(left_text) >= 300 and len(right_text) >= 300:
             splits.append((left_indices, right_indices))
 
     # If no valid splits are found, return as leaf
