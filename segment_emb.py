@@ -8,7 +8,138 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from typing import List, Tuple, Dict, Optional
 from tqdm import tqdm
 
-# [Previous model loading and helper functions remain the same until process_text]
+# Load register classification model
+model_name = "TurkuNLP/web-register-classification-multilingual"
+tokenizer_name = "xlm-roberta-large"
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+model.eval()
+
+# Load spaCy
+nlp = spacy.load("xx_ent_wiki_sm")
+if "sentencizer" not in nlp.pipe_names:
+    nlp.add_pipe("sentencizer")
+
+
+def truncate_text_to_tokens(text: str) -> str:
+    """Truncate text to fit within model's token limit."""
+    tokens = tokenizer(text, truncation=True, max_length=512)
+    return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
+
+
+def get_predictions(text: str) -> List[str]:
+    """Get multilabel predictions for a text segment."""
+    with torch.no_grad():
+        inputs = tokenizer(
+            text, return_tensors="pt", padding=True, truncation=True, max_length=512
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        outputs = model(**inputs)
+
+        # Apply sigmoid and threshold
+        probabilities = torch.sigmoid(outputs.logits)
+        predictions = (probabilities > 0.5).squeeze().cpu().numpy()
+
+        # Convert to labels using model's id2label
+        predicted_labels = [
+            model.config.id2label[i] for i, pred in enumerate(predictions) if pred
+        ]
+
+        return predicted_labels
+
+
+def get_embeddings(sentences: List[str]) -> np.ndarray:
+    """Extract embeddings from the model for a list of sentences."""
+    embeddings = []
+
+    with torch.no_grad():
+        for sentence in sentences:
+            inputs = tokenizer(
+                sentence,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            outputs = model(**inputs, output_hidden_states=True)
+
+            last_hidden_state = outputs.hidden_states[-1]
+            attention_mask = inputs["attention_mask"]
+
+            token_embeddings = last_hidden_state[0]
+            mask = (
+                attention_mask[0].unsqueeze(-1).expand(token_embeddings.size()).float()
+            )
+            sum_embeddings = torch.sum(token_embeddings * mask, 0)
+            sum_mask = torch.clamp(mask.sum(0), min=1e-9)
+            sentence_embedding = (sum_embeddings / sum_mask).cpu().numpy()
+
+            embeddings.append(sentence_embedding)
+
+    return np.array(embeddings)
+
+
+def find_optimal_split(
+    embeddings: np.ndarray, splits: List[Tuple[List[int], List[int]]]
+) -> Dict:
+    """Find the single best split that optimizes both dissimilarity between segments and similarity within segments."""
+
+    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    def get_segment_embedding(indices: List[int]) -> np.ndarray:
+        segment_embeddings = embeddings[indices]
+        return np.mean(segment_embeddings, axis=0)
+
+    def compute_internal_similarity(indices: List[int]) -> float:
+        if len(indices) <= 1:
+            return 1.0
+        segment_embeddings = embeddings[indices]
+        similarities = []
+        for i in range(len(indices)):
+            for j in range(i + 1, len(indices)):
+                similarities.append(
+                    cosine_similarity(segment_embeddings[i], segment_embeddings[j])
+                )
+        return np.mean(similarities) if similarities else 1.0
+
+    best_split = {"score": -1, "split": None, "metrics": None}
+
+    for split_indices in splits:
+        segment1_indices, segment2_indices = split_indices
+
+        segment1_emb = get_segment_embedding(segment1_indices)
+        segment2_emb = get_segment_embedding(segment2_indices)
+
+        inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
+        inter_segment_dissimilarity = 1 - inter_segment_similarity
+
+        segment1_internal_similarity = compute_internal_similarity(segment1_indices)
+        segment2_internal_similarity = compute_internal_similarity(segment2_indices)
+        avg_internal_similarity = np.mean(
+            [segment1_internal_similarity, segment2_internal_similarity]
+        )
+
+        combined_score = inter_segment_dissimilarity * avg_internal_similarity
+
+        metrics = {
+            "inter_segment_dissimilarity": float(inter_segment_dissimilarity),
+            "avg_internal_similarity": float(avg_internal_similarity),
+            "segment1_internal_similarity": float(segment1_internal_similarity),
+            "segment2_internal_similarity": float(segment2_internal_similarity),
+            "combined_score": float(combined_score),
+        }
+
+        if combined_score > best_split["score"]:
+            best_split["score"] = combined_score
+            best_split["split"] = split_indices
+            best_split["metrics"] = metrics
+
+    return best_split
 
 
 def process_text_recursive(text: str) -> Dict:
@@ -84,26 +215,42 @@ def process_text_recursive(text: str) -> Dict:
     }
 
 
+def collect_segments(segment: Dict) -> List[Dict]:
+    """Helper function to collect all segments in a flat list."""
+    segments = []
+
+    # Add current segment
+    segment_info = {"text": segment["text"], "predictions": segment["predictions"]}
+
+    if not segment["is_leaf"]:
+        segment_info["split_metrics"] = segment["split_metrics"]
+
+    segments.append(segment_info)
+
+    # Recursively collect sub-segments
+    if not segment["is_leaf"]:
+        segments.extend(collect_segments(segment["segments"][0]))
+        segments.extend(collect_segments(segment["segments"][1]))
+
+    return segments
+
+
+def print_segments(segments: List[Dict]):
+    """Helper function to print segments in a flat structure."""
+    for i, segment in enumerate(segments):
+        print(f"\nSegment {i}:")
+        print(f"Length: {len(segment['text'])} chars")
+        print(f"Predictions: {', '.join(segment['predictions'])}")
+        if "split_metrics" in segment:
+            print(f"Split metrics: {segment['split_metrics']}")
+        print(f"Text: {segment['text'][:100]}...")
+
+
 def process_tsv_file(input_file_path: str, output_file_path: str):
     """Process texts from TSV file and save recursive segmentations with predictions."""
     df = pd.read_csv(
         input_file_path, sep="\t", header=None, na_values="", keep_default_na=False
     )
-
-    def print_segment_tree(segment: Dict, depth: int = 0):
-        """Helper function to print the segment tree structure."""
-        indent = "  " * depth
-        print(f"{indent}Text length: {len(segment['text'])} chars")
-        print(f"{indent}Predictions: {', '.join(segment['predictions'])}")
-
-        if not segment["is_leaf"]:
-            print(f"{indent}Split metrics: {segment['split_metrics']}")
-            print(f"{indent}Segment 1:")
-            print_segment_tree(segment["segments"][0], depth + 1)
-            print(f"{indent}Segment 2:")
-            print_segment_tree(segment["segments"][1], depth + 1)
-        else:
-            print(f"{indent}[Leaf segment]")
 
     with open(output_file_path, "w", encoding="utf-8") as f:
         for idx, row in tqdm(df.iterrows(), total=len(df)):
@@ -114,15 +261,21 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
             # Process the text recursively
             results = process_text_recursive(text)
 
-            print(f"\nDocument {idx} (true labels: {true_labels}):")
-            print_segment_tree(results)
+            # Collect all segments
+            all_segments = collect_segments(results)
+
+            print(f"\nDocument {idx}:")
+            print(f"True labels: {', '.join(true_labels)}")
+            print(f"Document-level predictions: {', '.join(results['predictions'])}")
+            print_segments(all_segments)
             print("\n")
 
-            # Add metadata and write to JSONL
+            # Add metadata and write to JSONL in flat structure
             output_record = {
                 "text_id": idx,
                 "true_labels": true_labels,
-                "analysis": results,
+                "document_predictions": results["predictions"],
+                "segments": all_segments,
             }
             f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
 
