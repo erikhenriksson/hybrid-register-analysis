@@ -53,10 +53,10 @@ index_to_parent = {
 
 
 # Zero parents when child active
-def zero_parents(binary_list):
+def modify_parent(binary_list, value=0):
     for child_idx, parent_idx in index_to_parent.items():
         if child_idx < len(binary_list) and binary_list[child_idx] == 1:
-            binary_list[parent_idx] = 0
+            binary_list[parent_idx] = value
     return binary_list
 
 
@@ -114,6 +114,7 @@ def get_strong_registers(probs):
     binary_registers = [int(p >= threshold) for p in probs]
 
     # Zero out parents
+    binary_registers = modify_parent(binary_registers)
 
     # binary_registers = zero_parents(binary_registers)
     indices = [i for i, p in enumerate(binary_registers) if p]
@@ -230,15 +231,18 @@ def process_tsv_file(input_file_path, output_file_path):
         # Recursively split text - now handling 5 return values
         segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
+        # Get segment labels
+        segment_labels = [
+            index_to_name(modify_parent(get_strong_registers(probs)), 1)
+            for probs in segment_probs
+        ]
         # Create result dictionary
         result = {
             "document_labels": document_labels,
             "true_labels": true_labels,
             "document_embeddings": doc_embeddings.tolist(),
             "segments": segments,
-            "segment_labels": [
-                index_to_name(get_strong_registers(probs)) for probs in segment_probs
-            ],
+            "segment_labels": segment_labels,
             "segment_probs": [
                 [round(float(prob), 3) for prob in probs] for probs in segment_probs
             ],
