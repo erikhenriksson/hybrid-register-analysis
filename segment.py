@@ -122,31 +122,21 @@ def get_strong_registers(probs, parent_value=0):
 
 
 def recursive_segment(sentences, parent_labels=None):
-    """
-    sentences: list of sentences
-    parent_labels: set of labels that must be found somewhere in the segmentation
-
-    Returns: (segments, probs, embeddings)
-    """
     text = " ".join(sentences)
 
-    # First call - get document-level labels that must be preserved
     if parent_labels is None:
         probs, embeddings = predict_and_embed_batch([text])
         parent_labels = set(get_strong_registers(probs[0]))
 
-        # Don't split if too short
         if len(text) < min_chars_per_segment:
             return [sentences], [probs[0]], embeddings
 
-    valid_splits = []  # Will store (split_point, difference_score) for valid splits
+    valid_splits = []
 
-    # Try every possible split point
     for i in range(1, len(sentences)):
         left_sentences = sentences[:i]
         right_sentences = sentences[i:]
 
-        # Check minimum length constraint
         left_text = " ".join(left_sentences)
         right_text = " ".join(right_sentences)
         if (
@@ -155,46 +145,43 @@ def recursive_segment(sentences, parent_labels=None):
         ):
             continue
 
-        # Get predictions for both segments
         split_texts = [left_text, right_text]
         probs, embeddings = predict_and_embed_batch(split_texts)
         left_labels = set(get_strong_registers(probs[0]))
         right_labels = set(get_strong_registers(probs[1]))
 
-        # Skip if segments have identical register patterns
         if left_labels == right_labels:
             continue
 
-        # Check if parent labels are preserved across segments
         if parent_labels is not None:
             combined_labels = left_labels.union(right_labels)
             if not parent_labels.issubset(combined_labels):
                 continue
 
-        # Calculate how different the segments are
-        difference_score = len(left_labels ^ right_labels)  # symmetric difference
-        valid_splits.append((i, difference_score, probs, embeddings))
+        # New scoring:
+        # Primary score is still how different the segments are
+        difference_score = len(left_labels ^ right_labels)
+        # Secondary score (negative) is total number of registers found
+        purity_score = -(len(left_labels) + len(right_labels))
 
-    # If no valid splits found, return current segment
+        valid_splits.append((i, (difference_score, purity_score), probs, embeddings))
+
     if not valid_splits:
         probs, embeddings = predict_and_embed_batch([text])
         return [sentences], [probs[0]], embeddings
 
-    # Choose split with highest difference score
+    # max() will first compare difference_score, then purity_score if difference_scores are equal
     best_split = max(valid_splits, key=lambda x: x[1])
     split_point = best_split[0]
     split_probs = best_split[2]
     split_embeddings = best_split[3]
 
-    # Split sentences
     left_sentences = sentences[:split_point]
     right_sentences = sentences[split_point:]
 
-    # Get labels for recursive calls
     left_labels = set(get_strong_registers(split_probs[0]))
     right_labels = set(get_strong_registers(split_probs[1]))
 
-    # Recursive calls
     left_segments, left_probs, left_embeddings = recursive_segment(
         left_sentences, left_labels
     )
@@ -202,7 +189,6 @@ def recursive_segment(sentences, parent_labels=None):
         right_sentences, right_labels
     )
 
-    # Combine results
     return (
         left_segments + right_segments,
         left_probs + right_probs,
