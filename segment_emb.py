@@ -289,7 +289,7 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
             print(f"True labels: {', '.join(true_labels)}")
             print(f"Document-level predictions: {', '.join(results['predictions'])}")
             print_segments(all_segments)
-            print("\n")
+            print("\n-------------------------------\n")
 
             # Add metadata and write to JSONL in flat structure
             output_record = {
