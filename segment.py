@@ -120,25 +120,18 @@ def get_strong_registers(probs):
     return set(indices)
 
 
-def recursive_segment(sentences, required_labels=None, depth=0):
+def recursive_segment(sentences):
     """
-    sentences: list of sentences to potentially split
-    required_labels: set of labels that need to be found somewhere in this subtree or its siblings
-    depth: just for debugging/tracking recursion level
-
-    Returns: (segments, probs, embeddings, found_labels, valid)
-    where found_labels are all labels found in this subtree
-    and valid indicates if all required_labels were found somewhere
+    Returns: (segments, probs, embeddings)
     """
     text = " ".join(sentences)
-    is_root = depth == 0
 
-    # At root, get document-level labels that must be found somewhere
-    if is_root:
-        probs, embeddings = predict_and_embed_batch([text])
-        required_labels = set(get_strong_registers(probs[0]))
-        if len(text) < min_chars_per_segment:
-            return [sentences], [probs[0]], embeddings, required_labels, True
+    # Get current segment's registers - these must be preserved in any split
+    base_probs, base_embeddings = predict_and_embed_batch([text])
+    base_registers = set(get_strong_registers(base_probs[0]))
+
+    if len(text) < min_chars_per_segment:
+        return [sentences], [base_probs[0]], base_embeddings
 
     # Try every possible split point
     best_segmentation = None
@@ -163,45 +156,35 @@ def recursive_segment(sentences, required_labels=None, depth=0):
         left_registers = set(get_strong_registers(probs[0]))
         right_registers = set(get_strong_registers(probs[1]))
 
-        # Even if no strong registers found, continue exploring as they might appear in subsplits
+        # Must find all base registers in the union of left and right
+        if not base_registers.issubset(left_registers.union(right_registers)):
+            continue
 
-        # Try recursively splitting both sides
-        left_segments, left_probs, left_embs, left_found, left_valid = (
-            recursive_segment(left_sentences, left_registers, depth + 1)
-        )
-        right_segments, right_probs, right_embs, right_found, right_valid = (
-            recursive_segment(right_sentences, right_registers, depth + 1)
-        )
+        # Skip if segments have identical registers
+        if left_registers == right_registers:
+            continue
 
-        # Combine all found labels from both branches
-        all_found_labels = left_found.union(right_found)
+        # Calculate split score
+        split_score = len(left_registers ^ right_registers)
+        if split_score == 0:
+            continue
 
-        # At root, check if we found all required document labels
-        valid = True
-        if is_root:
-            valid = required_labels.issubset(all_found_labels)
+        # Recursively split both sides
+        left_segments, left_probs, left_embs = recursive_segment(left_sentences)
+        right_segments, right_probs, right_embs = recursive_segment(right_sentences)
 
-        # If this split works (valid will be True for non-root splits)
-        if valid:
-            # Calculate split score for ranking
-            split_score = len(left_registers ^ right_registers)
-
-            if split_score > best_score:
-                best_score = split_score
-                best_segmentation = (
-                    left_segments + right_segments,
-                    left_probs + right_probs,
-                    torch.cat([left_embs, right_embs], dim=0),
-                    all_found_labels,
-                    True,
-                )
+        # Store this as best split if it has highest register difference
+        if split_score > best_score:
+            best_score = split_score
+            best_segmentation = (
+                left_segments + right_segments,
+                left_probs + right_probs,
+                torch.cat([left_embs, right_embs], dim=0),
+            )
 
     # If no valid split found, return current segment
     if best_segmentation is None:
-        probs, embeddings = predict_and_embed_batch([text])
-        current_registers = set(get_strong_registers(probs[0]))
-        # Note: valid=True for non-root segments as they don't need to satisfy required_labels
-        return [sentences], [probs[0]], embeddings, current_registers, not is_root
+        return [sentences], [base_probs[0]], base_embeddings
 
     return best_segmentation
 
@@ -225,15 +208,7 @@ def process_tsv_file(input_file_path, output_file_path):
         document_labels = index_to_name(get_strong_registers(doc_probs[0]))
 
         # Recursively split text - now handling 5 return values
-        segments, segment_probs, segment_embeddings, found_labels, valid = (
-            recursive_segment(sentences)
-        )
-
-        # If not valid, use original unsplit text
-        if not valid:
-            segments = [sentences]
-            segment_probs = [doc_probs[0]]
-            segment_embeddings = doc_embeddings
+        segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
         # Create result dictionary
         result = {
