@@ -208,8 +208,8 @@ def process_tsv_file(input_file_path, output_file_path):
         text = row[1]  # Get text from second column
 
         # Preprocess text
-        truncated_text = truncate_text_to_tokens(text)
-        sentences = split_into_sentences(truncated_text)
+        # text = truncate_text_to_tokens(text)
+        sentences = split_into_sentences(text)
 
         # Get document level predictions first
         full_text = " ".join(sentences)
