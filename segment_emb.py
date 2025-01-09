@@ -200,10 +200,10 @@ def process_text_recursive(text: str) -> Dict:
             "is_leaf": True,
         }
 
-    # Find optimal split
-    best_split = find_optimal_split(embeddings, splits)
+    # Find optimal split based on register changes
+    best_split = find_optimal_split(embeddings, splits, sentences)
 
-    # Only split if we found a significant split
+    # Only split if we found a significant register change
     if best_split["split"] is None:
         return {
             "text": total_text,
