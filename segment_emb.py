@@ -86,7 +86,7 @@ def get_embeddings(sentences: List[str]) -> np.ndarray:
 def find_optimal_split(
     embeddings: np.ndarray, splits: List[Tuple[List[int], List[int]]]
 ) -> Dict:
-    """Find the single best split that represents a clear local maximum in quality."""
+    """Find the single best split by comparing against the overall document structure."""
 
     def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -95,74 +95,57 @@ def find_optimal_split(
         segment_embeddings = embeddings[indices]
         return np.mean(segment_embeddings, axis=0)
 
-    def compute_internal_similarity(indices: List[int]) -> float:
-        if len(indices) <= 1:
-            return 1.0
-        segment_embeddings = embeddings[indices]
-        similarities = []
-        for i in range(len(indices)):
-            for j in range(i + 1, len(indices)):
-                similarities.append(
-                    cosine_similarity(segment_embeddings[i], segment_embeddings[j])
-                )
-        return np.mean(similarities) if similarities else 1.0
-
     def compute_split_score(
         split_indices: Tuple[List[int], List[int]]
     ) -> Tuple[float, Dict]:
         segment1_indices, segment2_indices = split_indices
 
+        # Get embeddings for each segment
         segment1_emb = get_segment_embedding(segment1_indices)
         segment2_emb = get_segment_embedding(segment2_indices)
 
+        # Compare segments to each other
         inter_segment_similarity = cosine_similarity(segment1_emb, segment2_emb)
         inter_segment_dissimilarity = 1 - inter_segment_similarity
 
-        segment1_internal_similarity = compute_internal_similarity(segment1_indices)
-        segment2_internal_similarity = compute_internal_similarity(segment2_indices)
-        avg_internal_similarity = np.mean(
-            [segment1_internal_similarity, segment2_internal_similarity]
-        )
+        # Compare each segment to the overall document
+        full_doc_emb = get_segment_embedding(list(range(len(embeddings))))
+        seg1_doc_diff = 1 - cosine_similarity(segment1_emb, full_doc_emb)
+        seg2_doc_diff = 1 - cosine_similarity(segment2_emb, full_doc_emb)
 
-        combined_score = inter_segment_dissimilarity * avg_internal_similarity
+        # Score based on how different segments are from each other AND from the overall document
+        combined_score = (
+            inter_segment_dissimilarity * (seg1_doc_diff + seg2_doc_diff) / 2
+        )
 
         metrics = {
             "inter_segment_dissimilarity": float(inter_segment_dissimilarity),
-            "avg_internal_similarity": float(avg_internal_similarity),
-            "segment1_internal_similarity": float(segment1_internal_similarity),
-            "segment2_internal_similarity": float(segment2_internal_similarity),
+            "segment1_doc_difference": float(seg1_doc_diff),
+            "segment2_doc_difference": float(seg2_doc_diff),
             "combined_score": float(combined_score),
         }
 
         return combined_score, metrics
 
-    # For each split point, compute scores for a window of nearby split points
-    window_size = 3  # Check 3 splits on either side
-    best_split = {
-        "score": -1,
-        "split": None,
-        "metrics": None,
-        "is_local_maximum": False,
-    }
+    # Compute scores for all splits
+    split_scores = []
+    for split in splits:
+        score, metrics = compute_split_score(split)
+        split_scores.append((score, split, metrics))
 
-    for i, current_split in enumerate(splits):
-        current_score, current_metrics = compute_split_score(current_split)
+    # Only consider a split if it's significantly better than typical
+    scores = [s[0] for s in split_scores]
+    mean_score = np.mean(scores)
+    std_score = np.std(scores)
 
-        # Get scores for nearby splits
-        window_scores = []
-        for j in range(max(0, i - window_size), min(len(splits), i + window_size + 1)):
-            if j != i:
-                score, _ = compute_split_score(splits[j])
-                window_scores.append(score)
+    # Find best split among significant ones
+    best_split = {"score": -1, "split": None, "metrics": None}
 
-        # Check if current split is a local maximum
-        is_local_maximum = all(current_score >= score for score in window_scores)
-
-        if current_score > best_split["score"]:
-            best_split["score"] = current_score
-            best_split["split"] = current_split
-            best_split["metrics"] = current_metrics
-            best_split["is_local_maximum"] = is_local_maximum
+    for score, split, metrics in split_scores:
+        if score > mean_score + std_score and score > best_split["score"]:
+            best_split["score"] = score
+            best_split["split"] = split
+            best_split["metrics"] = metrics
 
     return best_split
 
