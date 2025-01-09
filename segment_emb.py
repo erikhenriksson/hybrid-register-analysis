@@ -26,7 +26,7 @@ if "sentencizer" not in nlp.pipe_names:
 # Truncate text to fit within model's token limit
 def truncate_text_to_tokens(text):
     """Truncate text to fit within model's token limit."""
-    tokens = tokenizer(text, truncation=True, max_length=max_tokens)
+    tokens = tokenizer(text, truncation=True, max_length=512)
     return tokenizer.decode(tokens["input_ids"], skip_special_tokens=True)
 
 
