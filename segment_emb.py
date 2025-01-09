@@ -144,7 +144,7 @@ def process_text(text: str) -> Dict:
 
     # Check if text is long enough to potentially split
     total_text = " ".join(sentences)
-    if len(total_text) < 1000:  # Need at least 1000 chars to make two 500-char segments
+    if len(total_text) < 500:  # Need at least 1000 chars to make two 500-char segments
         return {
             "error": "Text is too short for meaningful segmentation (needs 1000+ characters)"
         }
@@ -167,7 +167,7 @@ def process_text(text: str) -> Dict:
         right_text = " ".join([sentences[j] for j in right_indices])
 
         # Only include split if both segments meet minimum length
-        if len(left_text) >= 500 and len(right_text) >= 500:
+        if len(left_text) >= 250 and len(right_text) >= 250:
             splits.append((left_indices, right_indices))
 
     # Find optimal split
