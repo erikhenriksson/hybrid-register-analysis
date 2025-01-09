@@ -110,11 +110,11 @@ def truncate_text_to_tokens(text):
 
 
 # Get indices of registers that pass the threshold
-def get_strong_registers(probs):
+def get_strong_registers(probs, parent_value=0):
     binary_registers = [int(p >= threshold) for p in probs]
 
     # Zero out parents
-    binary_registers = modify_parent(binary_registers)
+    binary_registers = modify_parent(binary_registers, parent_value)
 
     # binary_registers = zero_parents(binary_registers)
     indices = [i for i, p in enumerate(binary_registers) if p]
@@ -226,17 +226,14 @@ def process_tsv_file(input_file_path, output_file_path):
         # Get document level predictions first
         full_text = " ".join(sentences)
         doc_probs, doc_embeddings = predict_and_embed_batch([full_text])
-        document_labels = index_to_name(
-            modify_parent(get_strong_registers(doc_probs[0]), 1)
-        )
+        document_labels = index_to_name(get_strong_registers(doc_probs[0], 1))
 
         # Recursively split text - now handling 5 return values
         segments, segment_probs, segment_embeddings = recursive_segment(sentences)
 
         # Get segment labels
         segment_labels = [
-            index_to_name(modify_parent(get_strong_registers(probs), 1))
-            for probs in segment_probs
+            index_to_name(get_strong_registers(probs, 1)) for probs in segment_probs
         ]
         # Create result dictionary
         result = {
