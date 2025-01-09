@@ -86,7 +86,7 @@ def get_embeddings(sentences: List[str]) -> np.ndarray:
 def find_optimal_split(
     embeddings: np.ndarray, splits: List[Tuple[List[int], List[int]]]
 ) -> Dict:
-    """Find the single best split that optimizes both dissimilarity between segments and similarity within segments."""
+    """Find the single best split that represents a clear local maximum in quality."""
 
     def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -107,9 +107,9 @@ def find_optimal_split(
                 )
         return np.mean(similarities) if similarities else 1.0
 
-    best_split = {"score": -1, "split": None, "metrics": None}
-
-    for split_indices in splits:
+    def compute_split_score(
+        split_indices: Tuple[List[int], List[int]]
+    ) -> Tuple[float, Dict]:
         segment1_indices, segment2_indices = split_indices
 
         segment1_emb = get_segment_embedding(segment1_indices)
@@ -134,10 +134,35 @@ def find_optimal_split(
             "combined_score": float(combined_score),
         }
 
-        if combined_score > best_split["score"]:
-            best_split["score"] = combined_score
-            best_split["split"] = split_indices
-            best_split["metrics"] = metrics
+        return combined_score, metrics
+
+    # For each split point, compute scores for a window of nearby split points
+    window_size = 3  # Check 3 splits on either side
+    best_split = {
+        "score": -1,
+        "split": None,
+        "metrics": None,
+        "is_local_maximum": False,
+    }
+
+    for i, current_split in enumerate(splits):
+        current_score, current_metrics = compute_split_score(current_split)
+
+        # Get scores for nearby splits
+        window_scores = []
+        for j in range(max(0, i - window_size), min(len(splits), i + window_size + 1)):
+            if j != i:
+                score, _ = compute_split_score(splits[j])
+                window_scores.append(score)
+
+        # Check if current split is a local maximum
+        is_local_maximum = all(current_score >= score for score in window_scores)
+
+        if current_score > best_split["score"]:
+            best_split["score"] = current_score
+            best_split["split"] = current_split
+            best_split["metrics"] = current_metrics
+            best_split["is_local_maximum"] = is_local_maximum
 
     return best_split
 
@@ -195,6 +220,16 @@ def process_text_recursive(text: str) -> Dict:
 
     # Find optimal split
     best_split = find_optimal_split(embeddings, splits)
+
+    # Only split if it's a clear local maximum
+    if not best_split["is_local_maximum"]:
+        return {
+            "text": total_text,
+            "sentences": sentences,
+            "predictions": get_predictions(total_text),
+            "is_leaf": True,
+        }
+
     split_indices = best_split["split"]
 
     # Get text for each segment
