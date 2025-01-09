@@ -230,14 +230,14 @@ def process_tsv_file(input_file_path: str, output_file_path: str):
                     f"Segment 1 labels: {', '.join(results['predictions']['segment1'])}"
                 )
                 print(
-                    f"Segment 1: {results['optimal_split']['segment1']['text'][:100]}..."
+                    f"Segment 1: {results['optimal_split']['segment1']['text'][:1000]}..."
                 )
                 print("----")
                 print(
                     f"Segment 2 labels: {', '.join(results['predictions']['segment2'])}"
                 )
                 print(
-                    f"Segment 2: {results['optimal_split']['segment2']['text'][:100]}..."
+                    f"Segment 2: {results['optimal_split']['segment2']['text'][:1000]}..."
                 )
                 print("\n")
 
