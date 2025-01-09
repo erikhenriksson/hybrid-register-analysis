@@ -234,12 +234,45 @@ def collect_segments(segment: Dict) -> List[Dict]:
         return result
 
 
+def combine_same_register_segments(segments: List[Dict]) -> List[Dict]:
+    """Combine adjacent segments that share the same register predictions."""
+    if not segments:
+        return []
+
+    combined = []
+    current_segment = segments[0].copy()
+
+    for next_segment in segments[1:]:
+        # Convert predictions to set for comparison
+        current_preds = set(current_segment["predictions"])
+        next_preds = set(next_segment["predictions"])
+
+        # If predictions match (including empty sets), combine segments
+        if current_preds == next_preds:
+            current_segment["text"] += " " + next_segment["text"]
+            current_segment["length"] = len(current_segment["text"])
+        else:
+            # Store length before adding to combined list
+            current_segment["length"] = len(current_segment["text"])
+            combined.append(current_segment)
+            current_segment = next_segment.copy()
+
+    # Don't forget to add the last segment
+    current_segment["length"] = len(current_segment["text"])
+    combined.append(current_segment)
+
+    return combined
+
+
 def print_segments(segments: List[Dict]):
     """Helper function to print final segments."""
-    print(f"\nTotal final segments: {len(segments)}")
-    for i, segment in enumerate(segments, 1):
+    # Combine segments with same register before printing
+    combined_segments = combine_same_register_segments(segments)
+
+    print(f"\nTotal final segments after combining: {len(combined_segments)}")
+    for i, segment in enumerate(combined_segments, 1):
         print(f"\nSegment {i}:")
-        print(f"Length: {len(segment['text'])} chars")
+        print(f"Length: {segment['length']} chars")
         print(f"Predictions: {', '.join(segment['predictions'])}")
         print(f"Text: {segment['text']}")
 
