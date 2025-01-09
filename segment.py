@@ -126,6 +126,8 @@ def recursive_segment(sentences):
     """
     text = " ".join(sentences)
 
+    print("text:", text)
+
     # Get current segment's registers - these must be preserved in any split
     base_probs, base_embeddings = predict_and_embed_batch([text])
     base_registers = set(get_strong_registers(base_probs[0]))
